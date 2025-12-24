@@ -3,6 +3,8 @@
  * Unified Payment Widget for Svelte Applications
  */
 
+import './styles.css';
+
 // Components
 export { default as ReevitCheckout } from './components/ReevitCheckout.svelte';
 export { default as PaymentMethodSelector } from './components/PaymentMethodSelector.svelte';
