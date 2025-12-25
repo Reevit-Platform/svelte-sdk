@@ -158,8 +158,11 @@
         </button>
 
         <div class="reevit-modal-header">
-          <h2 class="reevit-modal-title">Reevit Checkout</h2>
-          <p class="reevit-modal-subtitle">Secure payment powered by Reevit</p>
+          <img 
+            src="https://i.imgur.com/bzUR5Lm.png" 
+            alt="Reevit" 
+            class="reevit-modal__logo"
+          />
         </div>
 
         <div class="reevit-modal-body">
