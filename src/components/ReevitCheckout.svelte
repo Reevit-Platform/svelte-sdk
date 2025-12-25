@@ -23,6 +23,7 @@
   export let paymentMethods: ('card' | 'mobile_money' | 'bank_transfer')[] = ['card', 'mobile_money'];
   export let theme: ReevitTheme = {};
   export let isOpen: boolean = false;
+  export let apiBaseUrl: string | undefined = undefined;
 
   const store = createReevitStore({
     config: {
@@ -35,6 +36,7 @@
       metadata,
       paymentMethods,
     },
+    apiBaseUrl,
     onSuccess: (result) => dispatch('success', result),
     onError: (err) => dispatch('error', err),
     onClose: () => {
