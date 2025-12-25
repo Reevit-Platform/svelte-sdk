@@ -1,6 +1,6 @@
 {
   "name": "@reevit/svelte",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Unified Payment Widget for Svelte Applications",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -46,7 +46,7 @@
     "svelte": "^4.0.0 || ^5.0.0"
   },
   "dependencies": {
-    "@reevit/core": "^0.2.4"
+    "@reevit/core": "^0.2.5"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.1",
