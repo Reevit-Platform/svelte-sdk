@@ -24,6 +24,7 @@
   export let theme: ReevitTheme = {};
   export let isOpen: boolean = false;
   export let apiBaseUrl: string | undefined = undefined;
+  export let initialPaymentIntent: any = undefined;
 
   const store = createReevitStore({
     config: {
@@ -35,6 +36,7 @@
       reference,
       metadata,
       paymentMethods,
+      initialPaymentIntent,
     },
     apiBaseUrl,
     onSuccess: (result) => dispatch('success', result),
@@ -48,9 +50,20 @@
   $: state = $store;
   $: themeVars = createThemeVariables(theme);
 
+  // Watch for intent and selected method to auto-advance
+  $: if (isOpen && state.paymentIntent && state.selectedMethod) {
+    // For card, auto-advance immediately if we have an intent
+    if (state.selectedMethod === 'card') {
+      handleProcessPayment(null);
+    }
+    // For MoMo, we need a phone number (either from prop or form)
+    // The form handles its own submission, so we don't auto-advance MoMo here 
+    // unless we already have the data we need.
+  }
+
   $: if (isOpen) {
     document.body.style.overflow = 'hidden';
-    if (!state.paymentIntent) {
+    if (!state.paymentIntent && state.status === 'idle') {
       store.initialize();
     }
   } else {

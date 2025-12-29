@@ -52,14 +52,16 @@ function mapToPaymentIntent(
   response: PaymentIntentResponse,
   config: ReevitCheckoutConfig
 ): PaymentIntent {
-  return {
+  const intent: PaymentIntent = {
     id: response.id,
     clientSecret: response.client_secret,
+    pspPublicKey: response.psp_public_key,
     amount: response.amount,
     currency: response.currency,
     status: response.status as PaymentIntent['status'],
     recommendedPsp: mapProviderToPsp(response.provider),
     availableMethods: config.paymentMethods || ['card', 'mobile_money'],
+    reference: response.reference || config.reference,
     connectionId: response.connection_id,
     provider: response.provider,
     feeAmount: response.fee_amount,
@@ -67,6 +69,7 @@ function mapToPaymentIntent(
     netAmount: response.net_amount,
     metadata: config.metadata,
   };
+  return intent;
 }
 
 /**
@@ -77,6 +80,20 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
 
   // Store state
   let state: ReevitState = createInitialState();
+
+  // Handle initial intent if provided
+  if (config.initialPaymentIntent) {
+    state = {
+      ...state,
+      status: 'ready',
+      paymentIntent: config.initialPaymentIntent,
+      selectedMethod:
+        config.initialPaymentIntent.availableMethods?.length === 1
+          ? config.initialPaymentIntent.availableMethods[0]
+          : null,
+    };
+  }
+
   const subscribers = new Set<Subscriber<ReevitState>>();
 
   // API client
@@ -168,24 +185,41 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
     dispatch({ type: 'PROCESS_START' });
 
     try {
-      const { data, error } = await apiClient.confirmPayment(state.paymentIntent.id);
+      let resultData;
 
-      if (error) {
-        dispatch({ type: 'PROCESS_ERROR', payload: error });
-        onError?.(error);
-        return;
+      // Use public confirm endpoint if client secret is available
+      if (state.paymentIntent.clientSecret) {
+        const { data, error } = await apiClient.confirmPaymentIntent(
+          state.paymentIntent.id,
+          state.paymentIntent.clientSecret
+        );
+        if (error) {
+          dispatch({ type: 'PROCESS_ERROR', payload: error });
+          onError?.(error);
+          return;
+        }
+        resultData = data;
+      } else {
+        const { data, error } = await apiClient.confirmPayment(state.paymentIntent.id);
+        if (error) {
+          dispatch({ type: 'PROCESS_ERROR', payload: error });
+          onError?.(error);
+          return;
+        }
+        resultData = data;
       }
 
       const result: PaymentResult = {
         paymentId: state.paymentIntent.id,
         reference: (paymentData.reference as string) ||
+          (state.paymentIntent as PaymentIntent).reference ||
           (state.paymentIntent.metadata?.reference as string) || '',
         amount: state.paymentIntent.amount,
         currency: state.paymentIntent.currency,
         paymentMethod: state.selectedMethod,
         psp: state.paymentIntent.recommendedPsp,
         pspReference: (paymentData.pspReference as string) ||
-          (data?.provider_ref_id as string) || '',
+          (resultData?.provider_ref_id as string) || '',
         status: 'success',
         metadata: paymentData,
       };
