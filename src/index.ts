@@ -28,6 +28,7 @@ export type {
   PSPType,
   ReevitState,
   ReevitAction,
+  PaymentSource,
 } from '@reevit/core';
 
 export {

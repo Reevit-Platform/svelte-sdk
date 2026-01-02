@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "baseUrl": ".",
     "target": "ES2020",
     "module": "ESNext",
     "moduleResolution": "bundler",
@@ -12,7 +13,7 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "paths": {
-      "@reevit/core": ["../core/dist/index.d.ts"]
+      "@reevit/core": ["../core/src/index.ts"]
     }
   },
   "include": ["src/**/*"],
