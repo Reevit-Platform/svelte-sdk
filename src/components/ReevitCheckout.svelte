@@ -5,7 +5,13 @@
   import type { ReevitTheme } from '@reevit/core';
   import PaymentMethodSelector from './PaymentMethodSelector.svelte';
   import MobileMoneyForm from './MobileMoneyForm.svelte';
-  import { openPaystackPopup, openHubtelPopup, openFlutterwaveModal } from '../bridges';
+  import { 
+    openPaystackPopup, 
+    openHubtelPopup, 
+    openFlutterwaveModal,
+    openMonnifyModal,
+    initiateMPesaSTKPush,
+  } from '../bridges';
 
   const dispatch = createEventDispatcher<{
     success: any;
@@ -120,6 +126,42 @@
           callback: (res) => store.handlePspSuccess(res),
           onclose: () => {},
         });
+      } else if (psp === 'monnify') {
+        await openMonnifyModal({
+          apiKey: state.paymentIntent.pspPublicKey || publicKey,
+          contractCode: (metadata?.contract_code as string) || publicKey,
+          amount: amount,
+          currency: currency,
+          reference: state.paymentIntent.reference || state.paymentIntent.id,
+          customerName: (metadata?.customer_name as string) || email || '',
+          customerEmail: email || '',
+          customerPhone: data?.phone || phone,
+          metadata: metadata,
+          onSuccess: (res) => store.handlePspSuccess(res),
+          onClose: () => {},
+        });
+      } else if (psp === 'mpesa') {
+        const apiEndpointUrl = `${apiBaseUrl || 'https://api.reevit.io'}/v1/payments/${state.paymentIntent.id}/mpesa`;
+        await initiateMPesaSTKPush({
+          phoneNumber: data?.phone || phone || '',
+          amount: amount,
+          reference: state.paymentIntent.reference || state.paymentIntent.id,
+          description: `Payment ${state.paymentIntent.reference || ''}`,
+          onInitiated: () => {},
+          onSuccess: (res) => store.handlePspSuccess(res),
+          onError: (err) => store.handlePspError({ code: 'MPESA_ERROR', message: err.message }),
+        }, apiEndpointUrl);
+      } else if (psp === 'stripe') {
+        // Stripe requires Elements - for now, show a message that it needs custom integration
+        store.handlePspError({
+          code: 'STRIPE_NOT_IMPLEMENTED',
+          message: 'Stripe integration requires custom Elements setup. Please use the React SDK or implement custom Stripe Elements.',
+        });
+      } else {
+        store.handlePspError({
+          code: 'UNSUPPORTED_PSP',
+          message: `Payment provider "${psp}" is not supported in this checkout.`,
+        });
       }
     } catch (err) {
       store.handlePspError({
@@ -128,6 +170,7 @@
       });
     }
   }
+
 
   onMount(() => {
     // Initial initialization if isOpen is already true
