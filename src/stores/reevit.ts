@@ -56,6 +56,7 @@ function mapToPaymentIntent(
     id: response.id,
     clientSecret: response.client_secret,
     pspPublicKey: response.psp_public_key,
+    pspCredentials: response.psp_credentials,
     amount: response.amount,
     currency: response.currency,
     status: response.status as PaymentIntent['status'],

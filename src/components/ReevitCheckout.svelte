@@ -105,11 +105,12 @@
         });
       } else if (psp === 'hubtel') {
         await openHubtelPopup({
-          clientId: publicKey,
+          clientId: (state.paymentIntent.pspCredentials?.merchantAccount as string) || publicKey,
           purchaseDescription: `Payment for ${amount} ${currency}`,
           amount: amount,
           customerPhone: data?.phone || phone,
           customerEmail: email,
+          basicAuth: state.paymentIntent.pspCredentials?.basicAuth as string,
           onSuccess: (res) => store.handlePspSuccess(res),
           onClose: () => {},
         });
