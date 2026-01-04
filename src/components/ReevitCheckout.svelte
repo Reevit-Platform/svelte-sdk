@@ -55,6 +55,7 @@
 
   $: state = $store;
   $: themeVars = createThemeVariables(theme);
+  $: psp = state.paymentIntent?.recommendedPsp || 'paystack';
 
   // Watch for intent and selected method to auto-advance
   $: if (isOpen && state.paymentIntent && state.selectedMethod) {
@@ -244,14 +245,15 @@
               <p>Thank you for your payment.</p>
               <button class="reevit-done-btn" on:click={handleClose}>Done</button>
             </div>
-          {:else if state.status === 'ready' || state.status === 'method_selected'}
-            <PaymentMethodSelector
-              methods={paymentMethods}
-              selected={state.selectedMethod}
-              amount={amount}
-              currency={currency}
-              on:select={(e) => store.selectMethod(e.detail)}
-            />
+            {:else if state.status === 'ready' || state.status === 'method_selected'}
+              <PaymentMethodSelector
+                methods={paymentMethods}
+                selected={state.selectedMethod}
+                amount={amount}
+                currency={currency}
+                provider={psp}
+                on:select={(e) => store.selectMethod(e.detail)}
+              />
 
             {#if state.status === 'method_selected' && state.selectedMethod === 'mobile_money'}
               <div class="reevit-method-form-container">
