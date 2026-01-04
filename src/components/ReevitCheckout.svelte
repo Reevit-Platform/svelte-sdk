@@ -111,7 +111,7 @@
           amount: amount,
           customerPhone: data?.phone || phone,
           customerEmail: email,
-          basicAuth: state.paymentIntent.pspCredentials?.basicAuth as string,
+          hubtelSessionToken: state.paymentIntent.id,
           onSuccess: (res) => store.handlePspSuccess(res),
           onClose: () => {},
         });
