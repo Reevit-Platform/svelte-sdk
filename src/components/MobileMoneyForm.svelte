@@ -5,9 +5,11 @@
 
   export let initialPhone: string = '';
   export let loading: boolean = false;
+  export let hideCancel: boolean = false;
 
   const dispatch = createEventDispatcher<{
     submit: MobileMoneyFormData;
+    cancel: void;
   }>();
 
   let phone = initialPhone;
@@ -86,17 +88,29 @@
     <p class="reevit-error-message">{error}</p>
   {/if}
 
-  <button 
-    type="submit" 
-    class="reevit-submit-btn" 
-    disabled={loading || !phone}
-  >
-    {#if loading}
-      <span class="reevit-spinner"></span>
-    {:else}
-      <span>Continue</span>
+  <div class="reevit-momo-form__actions">
+    {#if !hideCancel}
+      <button 
+        type="button" 
+        class="reevit-btn reevit-btn--secondary" 
+        on:click={() => dispatch('cancel')}
+        disabled={loading}
+      >
+        Back
+      </button>
     {/if}
-  </button>
+    <button 
+      type="submit" 
+      class="reevit-btn reevit-btn--primary" 
+      disabled={loading || !phone}
+    >
+      {#if loading}
+        <span class="reevit-spinner"></span>
+      {:else}
+        <span>Continue</span>
+      {/if}
+    </button>
+  </div>
 
   <p class="reevit-secure-text">
     🔒 Secure mobile money payment via Reevit

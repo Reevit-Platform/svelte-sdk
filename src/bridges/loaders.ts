@@ -134,6 +134,7 @@ export interface HubtelConfig {
   customerEmail?: string;
   hubtelSessionToken?: string;
   basicAuth?: string;
+  preferredMethod?: 'card' | 'mobile_money';
   onSuccess: (response: Record<string, unknown>) => void;
   onClose: () => void;
 }
@@ -230,11 +231,15 @@ export async function openPaystackPopup(config: PaystackConfig): Promise<void> {
 export async function openHubtelPopup(config: HubtelConfig): Promise<void> {
   const checkout = new CheckoutSdk();
 
+  const methodPreference =
+    config.preferredMethod === 'mobile_money' ? 'momo' : config.preferredMethod === 'card' ? 'card' : undefined;
+
   const purchaseInfo = {
     amount: config.amount,
     purchaseDescription: config.purchaseDescription,
     customerPhoneNumber: config.customerPhone || '',
     clientReference: `hubtel_${Date.now()}`,
+    ...(methodPreference ? { paymentMethod: methodPreference } : {}),
   };
 
   const authValue = config.hubtelSessionToken || config.basicAuth || '';
@@ -246,6 +251,7 @@ export async function openHubtelPopup(config: HubtelConfig): Promise<void> {
       ? parseInt(config.clientId, 10)
       : config.clientId,
     basicAuth: authValue,
+    ...(methodPreference ? { paymentMethod: methodPreference } : {}),
   };
 
   checkout.openModal({
@@ -420,4 +426,3 @@ export async function initiateMPesaSTKPush(
     return { status: 'failed', message };
   }
 }
-

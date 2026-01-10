@@ -1,74 +1,38 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { formatAmount, cn } from '@reevit/core';
+  import { cn } from '@reevit/core';
   import type { PaymentMethod } from '@reevit/core';
 
   export let methods: PaymentMethod[];
   export let selected: PaymentMethod | null;
-  export let amount: number;
-  export let currency: string;
   export let provider: string | undefined = undefined;
+  export let layout: 'grid' | 'list' = 'list';
+  export let showLabel: boolean = true;
 
   const dispatch = createEventDispatcher<{
     select: PaymentMethod;
   }>();
 
-  // Human-readable PSP names
-  const pspNames: Record<string, string> = {
-    hubtel: 'Hubtel',
-    paystack: 'Paystack',
-    flutterwave: 'Flutterwave',
-    monnify: 'Monnify',
-    mpesa: 'M-Pesa',
-    stripe: 'Stripe',
-  };
-
-  function getMethodName(method: PaymentMethod): string {
-    // For Hubtel, show "Pay with Hubtel" for mobile_money
-    if (provider?.toLowerCase().includes('hubtel') && method === 'mobile_money') {
-      return `Pay with ${pspNames[provider.toLowerCase()] || 'Hubtel'}`;
-    }
-
-    const names: Record<PaymentMethod, string> = {
-      card: 'Card',
-      mobile_money: 'Mobile Money',
-      bank_transfer: 'Bank Transfer',
-    };
-    return names[method];
-  }
-
-  function getMethodDescription(method: PaymentMethod): string {
-    // Hubtel handles everything internally
-    if (provider?.toLowerCase().includes('hubtel')) {
-      return 'Card, Mobile Money, and Bank Transfer';
-    }
-
-    const descriptions: Record<PaymentMethod, string> = {
-      card: 'Visa, Mastercard, Maestro',
-      mobile_money: 'MTN, Vodafone, AirtelTigo',
-      bank_transfer: 'Transfer directly from your bank',
-    };
-    return descriptions[method];
-  }
+  $: isGrid = layout === 'grid';
 
   $: availableMethods = [
     {
       id: 'card' as const,
-      name: getMethodName('card'),
-      description: getMethodDescription('card'),
+      name: 'Card',
       icon: '💳',
+      description: 'Pay with Visa, Mastercard, or other cards',
     },
     {
       id: 'mobile_money' as const,
-      name: getMethodName('mobile_money'),
-      description: getMethodDescription('mobile_money'),
+      name: 'Mobile Money',
       icon: '📱',
+      description: 'MTN, Vodafone Cash, AirtelTigo Money',
     },
     {
       id: 'bank_transfer' as const,
-      name: getMethodName('bank_transfer'),
-      description: getMethodDescription('bank_transfer'),
+      name: 'Bank Transfer',
       icon: '🏦',
+      description: 'Pay directly from your bank account',
     },
   ].filter(m => methods.includes(m.id));
 
@@ -77,29 +41,46 @@
   }
 </script>
 
-<div class="reevit-method-selector">
-  <h3 class="reevit-section-title">Select Payment Method</h3>
-  <p class="reevit-amount-display">
-    Pay {formatAmount(amount, currency)}
-  </p>
-
-  <div class="reevit-methods-grid">
-    {#each availableMethods as method (method.id)}
+<div class={cn('reevit-method-selector', isGrid && 'reevit-method-selector--grid')}>
+  {#if showLabel}
+    <div class="reevit-method-selector__label">Select payment method</div>
+  {/if}
+  <div class={cn('reevit-method-selector__options', isGrid ? 'reevit-method-selector__options--grid' : 'reevit-method-selector__options--list')}>
+    {#each availableMethods as method, index (method.id)}
       <button
         type="button"
-        class={cn('reevit-method-card', selected === method.id && 'reevit-method-card--selected')}
+        class={cn(
+          'reevit-method-option',
+          isGrid ? 'reevit-method-option--grid' : 'reevit-method-option--list',
+          selected === method.id && 'reevit-method-option--selected'
+        )}
+        style="animation-delay: {index * 0.05}s"
         on:click={() => handleSelect(method.id)}
       >
-        <span class="reevit-method-icon">{method.icon}</span>
-        <div class="reevit-method-info">
-          <span class="reevit-method-name">{method.name}</span>
-          <span class="reevit-method-description">{method.description}</span>
-        </div>
-        <div class="reevit-method-radio">
-          {#if selected === method.id}
-            <div class="reevit-radio-inner"></div>
+        <span class="reevit-method-option__icon-wrapper">
+          <span class="reevit-method-option__icon">{method.icon}</span>
+        </span>
+        <div class="reevit-method-option__content">
+          <span class="reevit-method-option__label">{method.name}</span>
+          {#if !isGrid}
+            <span class="reevit-method-option__description">{method.description}</span>
           {/if}
         </div>
+        {#if !isGrid}
+          {#if selected === method.id}
+            <span class="reevit-method-option__check">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            </span>
+          {:else}
+            <span class="reevit-method-option__chevron">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+            </span>
+          {/if}
+        {/if}
       </button>
     {/each}
   </div>
