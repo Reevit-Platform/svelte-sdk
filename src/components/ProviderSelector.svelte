@@ -3,12 +3,29 @@
   import { cn } from '@reevit/core';
   import { createEventDispatcher } from 'svelte';
   import PaymentMethodSelector from './PaymentMethodSelector.svelte';
+  import flutterwaveLogo from '../assets/providers/flutterwave.png';
+  import hubtelLogo from '../assets/providers/hubtel.png';
+  import monnifyLogo from '../assets/providers/monnify.png';
+  import mpesaLogo from '../assets/providers/mpesa.png';
+  import paystackLogo from '../assets/providers/paystack.png';
+  import stripeLogo from '../assets/providers/stripe.png';
 
   export let providers: CheckoutProviderOption[] = [];
   export let selectedProvider: string | null = null;
   export let disabled: boolean = false;
   export let theme: ReevitTheme | undefined = undefined;
   export let selectedMethod: PaymentMethod | null = null;
+  export let country: string | undefined = undefined;
+
+  type SelectedTheme = {
+    backgroundColor?: string;
+    textColor?: string;
+    descriptionColor?: string;
+    borderColor?: string;
+  };
+
+  let selectedTheme: SelectedTheme | undefined;
+  let accordionBorderTop: string | undefined;
 
   const dispatch = createEventDispatcher<{
     select: string;
@@ -16,18 +33,20 @@
   }>();
 
   const providerLogos: Record<string, string> = {
-    paystack: 'https://reevit.io/images/providers/paystack.png',
-    stripe: 'https://reevit.io/images/providers/stripe.png',
-    flutterwave: 'https://reevit.io/images/providers/flutterwave.png',
-    hubtel: 'https://reevit.io/images/providers/hubtel.png',
-    monnify: 'https://reevit.io/images/providers/monnify.png',
-    mpesa: 'https://reevit.io/images/providers/mpesa.png',
+    paystack: paystackLogo,
+    stripe: stripeLogo,
+    flutterwave: flutterwaveLogo,
+    hubtel: hubtelLogo,
+    monnify: monnifyLogo,
+    mpesa: mpesaLogo,
   };
 
   const methodLabels: Record<PaymentMethod, string> = {
     card: 'Card',
     mobile_money: 'Mobile Money',
     bank_transfer: 'Bank Transfer',
+    apple_pay: 'Apple Pay',
+    google_pay: 'Google Pay',
   };
 
   const formatMethods = (methods: PaymentMethod[]): string => {
@@ -45,6 +64,23 @@
   function handleSelect(provider: string) {
     dispatch('select', provider);
   }
+
+  $: selectedTheme = theme
+    ? {
+        backgroundColor: theme.selectedBackgroundColor,
+        textColor: theme.selectedTextColor,
+        descriptionColor: theme.selectedDescriptionColor,
+        borderColor: theme.selectedBorderColor,
+      }
+    : undefined;
+
+  $: accordionBorderTop = theme?.selectedBorderColor
+    ? `1px solid ${theme.selectedBorderColor}`
+    : undefined;
+
+  const resolveCountry = (provider: CheckoutProviderOption): string => {
+    return provider.countries?.[0] || country || 'GH';
+  };
 </script>
 
 <div class="reevit-psp-selector">
@@ -80,13 +116,16 @@
             {/if}
           </span>
           <div class="reevit-psp-option__content">
-            <span class="reevit-psp-option__name">{provider.name}</span>
+            <span class="reevit-psp-option__name">Pay with {provider.name}</span>
             <span class="reevit-psp-option__methods">{formatMethods(providerMethods)}</span>
           </div>
         </button>
 
         {#if isSelected}
-          <div class="reevit-psp-accordion__content reevit-animate-fade-in">
+          <div
+            class="reevit-psp-accordion__content reevit-animate-fade-in"
+            style:border-top={accordionBorderTop}
+          >
             <div class="reevit-psp-methods">
               <PaymentMethodSelector
                 methods={providerMethods}
@@ -94,6 +133,9 @@
                 provider={provider.provider}
                 layout="list"
                 showLabel={false}
+                disabled={disabled}
+                country={resolveCountry(provider)}
+                selectedTheme={selectedTheme}
                 on:select={(e) => dispatch('methodSelect', e.detail)}
               />
             </div>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import { createReevitStore } from '../stores/reevit';
-  import { createThemeVariables, cn, createReevitClient } from '@reevit/core';
+  import { createThemeVariables, cn, createReevitClient, detectCountryFromCurrency, formatAmount } from '@reevit/core';
   import type {
     ReevitTheme,
     PaymentIntent,
@@ -29,6 +29,13 @@
 
   const dispatch = createEventDispatcher<ReevitCheckoutEvents>();
 
+  function clearSuccessTimeout(): void {
+    if (successTimeout) {
+      clearTimeout(successTimeout);
+      successTimeout = null;
+    }
+  }
+
   export let publicKey: string | undefined = undefined;
   export let amount: number;
   export let currency: string;
@@ -39,12 +46,23 @@
   export let metadata: Record<string, unknown> | undefined = undefined;
   export let customFields: Record<string, unknown> | undefined = undefined;
   export let paymentLinkCode: string | undefined = undefined;
-  export let paymentMethods: ('card' | 'mobile_money' | 'bank_transfer')[] = ['card', 'mobile_money'];
+  export let paymentMethods: PaymentMethod[] = ['card', 'mobile_money'];
   export let theme: ReevitTheme = {};
   export let isOpen: boolean = false;
   export let apiBaseUrl: string | undefined = undefined;
   export let initialPaymentIntent: PaymentIntent | undefined = undefined;
+  export let successDelayMs: number = 5000;
   let resolvedTheme: ReevitTheme = {};
+  let selectedTheme:
+    | {
+        backgroundColor?: string;
+        textColor?: string;
+        descriptionColor?: string;
+        borderColor?: string;
+      }
+    | undefined = undefined;
+  let fallbackCountry: string = 'GH';
+  let successTimeout: ReturnType<typeof setTimeout> | null = null;
   let selectedProvider: PSPType | null = null;
   let activeProvider: PSPType = 'paystack';
   let configuredMethods: PaymentMethod[] = ['card', 'mobile_money'];
@@ -71,7 +89,7 @@
     metadata: Record<string, unknown> | undefined;
     customFields: Record<string, unknown> | undefined;
     paymentLinkCode: string | undefined;
-    paymentMethods: ('card' | 'mobile_money' | 'bank_transfer')[];
+    paymentMethods: PaymentMethod[];
     initialPaymentIntent: PaymentIntent | undefined;
   }
 
@@ -91,7 +109,19 @@
       initialPaymentIntent,
     } as StoreConfig,
     apiBaseUrl,
-    onSuccess: (result: PaymentResult) => dispatch('success', result),
+    onSuccess: (result: PaymentResult) => {
+      clearSuccessTimeout();
+      if (successDelayMs <= 0) {
+        dispatch('success', result);
+        handleClose();
+        return;
+      }
+      successTimeout = setTimeout(() => {
+        dispatch('success', result);
+        handleClose();
+        successTimeout = null;
+      }, successDelayMs);
+    },
     onError: (err: { code: string; message: string }) => dispatch('error', err),
     onClose: () => {
       isOpen = false;
@@ -105,6 +135,13 @@
     ...(theme || {}),
   };
   $: themeVars = createThemeVariables(resolvedTheme);
+  $: selectedTheme = {
+    backgroundColor: resolvedTheme.selectedBackgroundColor,
+    textColor: resolvedTheme.selectedTextColor,
+    descriptionColor: resolvedTheme.selectedDescriptionColor,
+    borderColor: resolvedTheme.selectedBorderColor,
+  };
+  $: fallbackCountry = detectCountryFromCurrency(currency);
   $: activeProvider = selectedProvider || state.paymentIntent?.recommendedPsp || 'paystack';
   $: configuredMethods = paymentMethods?.length ? paymentMethods : ['card', 'mobile_money'];
   $: providerOptions = (() => {
@@ -200,6 +237,7 @@
   }
 
   function handleClose(): void {
+    clearSuccessTimeout();
     isOpen = false;
     selectedProvider = null;
     store.close();
@@ -366,6 +404,7 @@
     if (typeof document !== 'undefined') {
       document.body.style.overflow = '';
     }
+    clearSuccessTimeout();
   });
 </script>
 
@@ -393,7 +432,7 @@
       on:click={handleClose}
       on:keydown={(e: KeyboardEvent) => e.key === 'Escape' && handleClose()}
     >
-      <div class={cn('reevit-modal-content', resolvedTheme.darkMode && 'reevit-modal--dark')}>
+      <div class={cn('reevit-modal-content', resolvedTheme.darkMode && 'reevit-modal--dark', state.status === 'success' && 'reevit-modal--success')}>
         <button class="reevit-modal-close" on:click={handleClose} aria-label="Close">
           &times;
         </button>
@@ -413,23 +452,26 @@
 
         <div class="reevit-modal-body">
           {#if state.status === 'loading'}
-            <div class="reevit-loading-state">
+            <div class="reevit-loading">
               <div class="reevit-spinner reevit-spinner--large"></div>
               <p>Initializing payment...</p>
             </div>
           {:else if state.status === 'failed' && state.error}
-            <div class="reevit-error-state">
-              <div class="reevit-error-icon">⚠️</div>
+            <div class="reevit-error">
+              <div class="reevit-error__icon">✕</div>
               <h3>Payment Failed</h3>
               <p>{state.error.message}</p>
               <button class="reevit-retry-btn" on:click={() => store.initialize()}>Retry</button>
             </div>
           {:else if state.status === 'success'}
-            <div class="reevit-success-state">
-              <div class="reevit-success-icon">✅</div>
-              <h3>Payment Successful</h3>
-              <p>Thank you for your payment.</p>
-              <button class="reevit-done-btn" on:click={handleClose}>Done</button>
+            <div class="reevit-success">
+              <div class="reevit-success__icon">✓</div>
+              <h3>Payment Successful!</h3>
+              <p class="reevit-success__amount">{formatAmount(amount, currency)}</p>
+              {#if state.result?.reference}
+                <p class="reevit-success__reference">Reference: {state.result.reference}</p>
+              {/if}
+              <p class="reevit-success__redirect">Redirecting in a moment...</p>
             </div>
           {:else if state.status === 'ready' || storeIsMethodSelected}
             <div class="reevit-method-step reevit-animate-slide-up">
@@ -440,6 +482,7 @@
                   disabled={storeIsLoading}
                   theme={resolvedTheme}
                   selectedMethod={state.selectedMethod}
+                  country={fallbackCountry}
                   on:select={(e) => handleProviderSelect(e.detail)}
                   on:methodSelect={(e) => store.selectMethod(e.detail)}
                 >
@@ -493,6 +536,9 @@
                   provider={activeProvider}
                   layout="grid"
                   showLabel={false}
+                  disabled={storeIsLoading}
+                  country={fallbackCountry}
+                  selectedTheme={selectedTheme}
                   on:select={(e) => store.selectMethod(e.detail as PaymentMethod)}
                 />
 
