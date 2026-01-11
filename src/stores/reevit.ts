@@ -166,6 +166,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
 
   // Store state
   let state: ReevitState = createInitialState();
+  let initRequestId = 0;
 
   // Handle initial intent if provided
   if (config.initialPaymentIntent) {
@@ -216,6 +217,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
     method?: PaymentMethod,
     options?: { preferredProvider?: string; allowedProviders?: string[] }
   ) => {
+    const requestId = ++initRequestId;
     dispatch({ type: 'INIT_START' });
 
     try {
@@ -272,6 +274,10 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
         error = result.error;
       }
 
+      if (requestId !== initRequestId) {
+        return;
+      }
+
       if (error) {
         dispatch({ type: 'INIT_ERROR', payload: error });
         onError?.(error);
@@ -292,6 +298,9 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
       const paymentIntent = mapToPaymentIntent(data, { ...config, reference });
       dispatch({ type: 'INIT_SUCCESS', payload: paymentIntent });
     } catch (err) {
+      if (requestId !== initRequestId) {
+        return;
+      }
       const error: PaymentError = {
         code: 'INIT_FAILED',
         message: err instanceof Error ? err.message : 'Failed to initialize checkout',
@@ -383,6 +392,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
 
   // Reset checkout
   const reset = () => {
+    initRequestId += 1;
     dispatch({ type: 'RESET' });
   };
 
