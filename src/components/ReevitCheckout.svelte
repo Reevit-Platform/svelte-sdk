@@ -203,22 +203,8 @@
   $: storeIsProcessing = store.getStatus() === 'processing';
   $: storeIsMethodSelected = store.getStatus() === 'method_selected';
 
-  // Watch for intent and selected method to auto-advance
-  $: if (isOpen && state.paymentIntent && state.selectedMethod) {
-    const psp = (selectedProvider || state.paymentIntent.recommendedPsp || 'paystack').toLowerCase();
-    const needsPhone = psp.includes('mpesa');
-
-    // For card, auto-advance immediately if we have an intent
-    if (state.selectedMethod === 'card') {
-      handleProcessPayment(null);
-    }
-    // For mobile money, auto-advance only if we have phone if required
-    else if (state.selectedMethod === 'mobile_money') {
-      if (!needsPhone || (phone)) {
-        handleProcessPayment(null);
-      }
-    }
-  }
+  // NOTE: Auto-advance logic removed to allow users to see and select payment methods
+  // Users must explicitly click a "Pay" button to proceed to the PSP bridge
 
   $: if (isOpen) {
     document.body.style.overflow = 'hidden';
@@ -257,6 +243,13 @@
             amount,
             currency,
             ref: state.paymentIntent.id,
+            metadata: {
+              ...metadata,
+              org_id: state.paymentIntent.orgId ?? (metadata?.org_id as string),
+              payment_id: state.paymentIntent.id,
+              connection_id: state.paymentIntent.connectionId ?? (metadata?.connection_id as string),
+              customer_phone: data?.phone ?? phone,
+            },
             onSuccess: (res) => store.handlePspSuccess(res),
             onClose: () => {},
           });
@@ -304,6 +297,13 @@
             customer: {
               email: email ?? '',
               phone_number: data?.phone ?? phone ?? '',
+            },
+            meta: {
+              ...metadata,
+              org_id: state.paymentIntent.orgId ?? (metadata?.org_id as string),
+              payment_id: state.paymentIntent.id,
+              connection_id: state.paymentIntent.connectionId ?? (metadata?.connection_id as string),
+              customer_phone: data?.phone ?? phone,
             },
             callback: (res) => store.handlePspSuccess(res),
             onclose: () => {},
@@ -375,11 +375,10 @@
     }
   }
 
-  function handleProviderSelect(provider: string) {
+  async function handleProviderSelect(provider: string) {
     // Toggle behavior - clicking same PSP collapses it
     if (provider === selectedProvider) {
       selectedProvider = null;
-      store.reset();
       return;
     }
 
@@ -389,8 +388,13 @@
       state.selectedMethod && methods.includes(state.selectedMethod) ? state.selectedMethod : methods[0];
 
     selectedProvider = provider as PSPType;
-    store.reset();
-    store.initialize(methodForInit, { preferredProvider: provider, allowedProviders: [provider] });
+
+    // Select the appropriate method for this provider
+    // No need to re-initialize - we already have the payment intent with available_psps
+    // Re-initializing would create a duplicate payment
+    if (methodForInit) {
+      store.selectMethod(methodForInit);
+    }
   }
 
   onMount(() => {
@@ -433,24 +437,35 @@
       on:keydown={(e: KeyboardEvent) => e.key === 'Escape' && handleClose()}
     >
       <div class={cn('reevit-modal-content', resolvedTheme.darkMode && 'reevit-modal--dark', state.status === 'success' && 'reevit-modal--success')}>
-        <button class="reevit-modal-close" on:click={handleClose} aria-label="Close">
-          &times;
-        </button>
-
-        <div class="reevit-modal-header">
+        <div class="reevit-modal__header">
           <div class="reevit-modal__branding">
-            <img
-              src={resolvedTheme.logoUrl || "https://i.imgur.com/bzUR5Lm.png"}
-              alt={resolvedTheme.companyName || "Reevit"}
-              class="reevit-modal__logo"
-            />
+            {#if resolvedTheme.logoUrl}
+              <img
+                src={resolvedTheme.logoUrl}
+                alt={resolvedTheme.companyName || ""}
+                class="reevit-modal__logo"
+              />
+            {:else if resolvedTheme.companyName}
+              <span class="reevit-modal__logo-fallback">{resolvedTheme.companyName.charAt(0)}</span>
+            {/if}
             {#if resolvedTheme.companyName}
               <span class="reevit-modal__brand-name">{resolvedTheme.companyName}</span>
             {/if}
           </div>
+          <button class="reevit-modal__close" on:click={handleClose} aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
         </div>
 
-        <div class="reevit-modal-body">
+        <div class="reevit-modal__amount">
+          <span class="reevit-modal__amount-label">Pay</span>
+          <span class="reevit-modal__amount-value">{formatAmount(amount, currency)}</span>
+        </div>
+
+        <div class="reevit-modal__content">
           {#if state.status === 'loading'}
             <div class="reevit-loading">
               <div class="reevit-spinner reevit-spinner--large"></div>
@@ -586,12 +601,14 @@
           {/if}
         </div>
 
-        <div class="reevit-modal-footer">
-          <div class="reevit-trust-badges">
-            <span>PCI DSS Compliant</span>
-            <span>•</span>
-            <span>SSL Secure</span>
-          </div>
+        <div class="reevit-modal__footer">
+          <span class="reevit-modal__secured">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+            Secured by <span class="reevit-modal__secured-brand">Reevit</span>
+          </span>
         </div>
       </div>
     </div>

@@ -9,6 +9,7 @@ import {
   reevitReducer,
   generateReference,
   detectCountryFromCurrency,
+  generateIdempotencyKey,
   type ReevitCheckoutConfig,
   type CheckoutState,
   type PaymentMethod,
@@ -150,6 +151,7 @@ function mapToPaymentIntent(
     recommendedPsp: mapProviderToPsp(response.provider),
     availableMethods: config.paymentMethods || ['card', 'mobile_money'],
     reference: response.reference || config.reference,
+    orgId: response.org_id,
     connectionId: response.connection_id,
     provider: response.provider,
     feeAmount: response.fee_amount,
@@ -171,6 +173,9 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
   // Store state
   let state: ReevitState = createInitialState();
   let initRequestId = 0;
+
+  // Guard against duplicate initialize() calls
+  let initializing = !!config.initialPaymentIntent;
 
   // Handle initial intent if provided
   if (config.initialPaymentIntent) {
@@ -221,6 +226,12 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
     method?: PaymentMethod,
     options?: { preferredProvider?: string; allowedProviders?: string[] }
   ) => {
+    // Guard against duplicate calls
+    if (initializing) {
+      return;
+    }
+    initializing = true;
+
     const requestId = ++initRequestId;
     dispatch({ type: 'INIT_START' });
 
@@ -237,13 +248,23 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
       let error: PaymentError | undefined;
 
       if (config.paymentLinkCode) {
+        // Generate a deterministic idempotency key for payment link requests
+        const idempotencyKey = generateIdempotencyKey({
+          paymentLinkCode: config.paymentLinkCode,
+          amount: config.amount,
+          email: config.email || '',
+          phone: config.phone || '',
+          method: paymentMethod || '',
+          provider: options?.preferredProvider || options?.allowedProviders?.[0] || '',
+        });
+
         const response = await fetch(
           `${apiBaseUrl || DEFAULT_PUBLIC_API_BASE_URL}/v1/pay/${config.paymentLinkCode}/pay`,
           {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Idempotency-Key': `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
+              'Idempotency-Key': idempotencyKey,
             },
             body: JSON.stringify({
               amount: config.amount,
@@ -285,6 +306,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
       if (error) {
         dispatch({ type: 'INIT_ERROR', payload: error });
         onError?.(error);
+        initializing = false;
         return;
       }
 
@@ -296,11 +318,13 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
         };
         dispatch({ type: 'INIT_ERROR', payload: noDataError });
         onError?.(noDataError);
+        initializing = false;
         return;
       }
 
       const paymentIntent = mapToPaymentIntent(data, { ...config, reference });
       dispatch({ type: 'INIT_SUCCESS', payload: paymentIntent });
+      // Don't reset initializing here - once initialized, stay initialized until reset()
     } catch (err) {
       if (requestId !== initRequestId) {
         return;
@@ -313,6 +337,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
       };
       dispatch({ type: 'INIT_ERROR', payload: error });
       onError?.(error);
+      initializing = false;
     }
   };
 
@@ -395,7 +420,17 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
   };
 
   // Reset checkout
-  const reset = () => {
+  const reset = async () => {
+    // Cancel the existing payment intent if it exists and is still pending
+    if (state.paymentIntent && state.status !== 'success') {
+      try {
+        await apiClient.cancelPaymentIntent(state.paymentIntent.id);
+      } catch {
+        // Silently ignore cancel errors
+      }
+    }
+
+    initializing = false;
     initRequestId += 1;
     dispatch({ type: 'RESET' });
   };
