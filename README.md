@@ -5,7 +5,7 @@ Svelte SDK for integrating Reevit unified payments into your application.
 ## Installation
 
 ```bash
-npm install @reevit/svelte@0.5.0 @reevit/core@0.5.0
+npm install @reevit/svelte @reevit/core
 ```
 
 ## Quick Start
