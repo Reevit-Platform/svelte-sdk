@@ -31,6 +31,7 @@ The simplest way to integrate Reevit is using the `ReevitCheckout` component.
   amount={10000}
   currency="GHS"
   email="customer@example.com"
+  idempotencyKey="order_12345"
   on:success={handleSuccess}
   on:error={handleError}
 >
@@ -38,6 +39,19 @@ The simplest way to integrate Reevit is using the `ReevitCheckout` component.
     {isLoading ? 'Loading...' : 'Pay GHS 100.00'}
   </button>
 </ReevitCheckout>
+```
+
+## Idempotency
+
+Provide an `idempotencyKey` tied to your order/cart to avoid duplicate intent creation and enable safe retries.
+
+```svelte
+<ReevitCheckout
+  publicKey="pk_test_xxx"
+  amount={10000}
+  currency="GHS"
+  idempotencyKey="order_12345"
+/>
 ```
 
 ## Controlled Modal
@@ -122,6 +136,7 @@ For full control over the payment flow, use the `createReevitStore` factory.
 | `phone` | `string` | Customer's phone number (recommended for Mobile Money) |
 | `customerName` | `string` | Customer name (used in payment links and some PSPs) |
 | `reference` | `string` | Your own unique transaction reference |
+| `idempotencyKey` | `string` | Optional idempotency key to safely retry or dedupe intent creation |
 | `metadata` | `object` | Key-value pairs to store with the transaction |
 | `customFields` | `object` | Custom fields for payment links |
 | `paymentLinkCode` | `string` | Hosted payment link code (uses the public link checkout flow) |
