@@ -157,7 +157,10 @@
   }
 </script>
 
-<div class={cn('reevit-method-selector', isGrid && 'reevit-method-selector--grid')}>
+<div
+  class={cn('reevit-method-selector', isGrid && 'reevit-method-selector--grid')}
+  data-provider={provider}
+>
   {#if showLabel}
     <div class="reevit-method-selector__label">Select payment method</div>
   {/if}
