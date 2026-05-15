@@ -27,7 +27,7 @@ The simplest way to integrate Reevit is using the `ReevitCheckout` component.
 </script>
 
 <ReevitCheckout
-  publicKey="pk_test_xxx"
+  publicKey="pfk_test_xxx"
   amount={10000}
   currency="GHS"
   email="customer@example.com"
@@ -47,7 +47,7 @@ Provide an `idempotencyKey` tied to your order/cart to avoid duplicate intent cr
 
 ```svelte
 <ReevitCheckout
-  publicKey="pk_test_xxx"
+  publicKey="pfk_test_xxx"
   amount={10000}
   currency="GHS"
   idempotencyKey="order_12345"
@@ -64,7 +64,7 @@ You can control the open state yourself.
 </script>
 
 <ReevitCheckout
-  publicKey="pk_test_your_key"
+  publicKey="pfk_test_your_key"
   amount={10000}
   currency="GHS"
   bind:isOpen={open}
@@ -89,7 +89,7 @@ By default, the checkout shows a success screen for 5 seconds before calling `on
     backgroundColor: '#FFFFFF',
     borderRadius: '10px'
   }}
-  publicKey="pk_test_xxx"
+  publicKey="pfk_test_xxx"
   amount={5000}
   currency="GHS"
 >
@@ -107,7 +107,7 @@ For full control over the payment flow, use the `createReevitStore` factory.
 
   const store = createReevitStore({
     config: {
-      publicKey: 'pk_test_xxx',
+      publicKey: 'pfk_test_xxx',
       amount: 5000,
       currency: 'GHS',
     },
@@ -247,9 +247,9 @@ const result = await initiateMPesaSTKPush(
 
 ## Release Notes
 
-### v0.7.0
+### v0.9.0
 
-- Updated `@reevit/core` dependency to v0.7.0
+- Updated `@reevit/core` dependency to v0.9.0
 - Version alignment across all Reevit SDKs
 
 ## License
