@@ -310,9 +310,12 @@
           await openPaystackPopup({
             key: state.paymentIntent.pspPublicKey ?? publicKey ?? '',
             email: email ?? '',
+            phone: data?.phone ?? phone,
             amount,
             currency,
             ref: state.paymentIntent.id,
+            accessCode: state.paymentIntent.clientSecret,
+            channels: state.selectedMethod === 'mobile_money' ? ['mobile_money'] : ['card'],
             metadata: {
               ...metadata,
               org_id: state.paymentIntent.orgId ?? (metadata?.org_id as string),
