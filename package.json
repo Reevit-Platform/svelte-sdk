@@ -35,13 +35,13 @@
   ],
   "author": "Reevit",
   "license": "MIT",
-  "homepage": "https://github.com/Reevit-Platform/svelte#readme",
+  "homepage": "https://github.com/Reevit-Platform/svelte-sdk#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Reevit-Platform/svelte.git"
+    "url": "https://github.com/Reevit-Platform/svelte-sdk.git"
   },
   "bugs": {
-    "url": "https://github.com/Reevit-Platform/svelte/issues"
+    "url": "https://github.com/Reevit-Platform/svelte-sdk/issues"
   },
   "peerDependencies": {
     "svelte": "^4.0.0 || ^5.0.0"
