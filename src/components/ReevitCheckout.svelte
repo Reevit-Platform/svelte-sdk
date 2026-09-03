@@ -70,8 +70,14 @@
   }
 
   export let publicKey: string | undefined = undefined;
-  export let amount: number;
-  export let currency: string;
+  /** Server-created checkout session secret. Prefer this over browser-created intents. */
+  export let sessionSecret: string | undefined = undefined;
+  /** Amount in the smallest currency unit. Required unless `sessionSecret` or `initialPaymentIntent` is given. */
+  export let amount: number | undefined = undefined;
+  /** Currency code. Required unless `sessionSecret` or `initialPaymentIntent` is given. */
+  export let currency: string | undefined = undefined;
+  /** Order-scoped key that makes intent creation safe to retry. */
+  export let idempotencyKey: string | undefined = undefined;
   export let email: string | undefined = undefined;
   export let phone: string | undefined = undefined;
   export let customerName: string | undefined = undefined;
@@ -113,8 +119,10 @@
 
   interface StoreConfig {
     publicKey: string | undefined;
-    amount: number;
-    currency: string;
+    sessionSecret: string | undefined;
+    amount: number | undefined;
+    currency: string | undefined;
+    idempotencyKey: string | undefined;
     email: string | undefined;
     phone: string | undefined;
     customerName: string | undefined;
@@ -129,8 +137,10 @@
   const store = createReevitStore({
     config: {
       publicKey,
+      sessionSecret,
       amount,
       currency,
+      idempotencyKey,
       email,
       phone,
       customerName,
@@ -174,7 +184,7 @@
     descriptionColor: resolvedTheme.selectedDescriptionColor,
     borderColor: resolvedTheme.selectedBorderColor,
   };
-  $: fallbackCountry = detectCountryFromCurrency(currency);
+  $: fallbackCountry = detectCountryFromCurrency(displayCurrency);
   $: activeProvider = selectedProvider || state.paymentIntent?.recommendedPsp || 'paystack';
   $: configuredMethods = paymentMethods?.length ? paymentMethods : ['card', 'mobile_money'];
   $: providerOptions = (() => {
@@ -311,8 +321,8 @@
             key: state.paymentIntent.pspPublicKey ?? publicKey ?? '',
             email: email ?? '',
             phone: data?.phone ?? phone,
-            amount,
-            currency,
+            amount: displayAmount,
+            currency: displayCurrency,
             ref: state.paymentIntent.id,
             accessCode: state.paymentIntent.clientSecret,
             channels: state.selectedMethod === 'mobile_money' ? ['mobile_money'] : ['card'],
@@ -350,8 +360,8 @@
 
           await openHubtelPopup({
             clientId: (session.merchantAccount as string) || (typeof merchantAccount === 'string' ? merchantAccount : publicKey ?? ''),
-            purchaseDescription: `Payment for ${amount} ${currency}`,
-            amount,
+            purchaseDescription: `Payment for ${displayAmount} ${displayCurrency}`,
+            amount: displayAmount,
             apiBaseUrl,
             callbackUrl: `${apiBaseUrl || 'https://api.reevit.io'}/v1/webhooks/incoming/hubtel`,
             clientReference: state.paymentIntent.providerRefId || state.paymentIntent.reference || state.paymentIntent.id,
@@ -368,8 +378,8 @@
           await openFlutterwaveModal({
             public_key: state.paymentIntent.pspPublicKey ?? publicKey ?? '',
             tx_ref: state.paymentIntent.id,
-            amount,
-            currency,
+            amount: displayAmount,
+            currency: displayCurrency,
             customer: {
               email: email ?? '',
               phone_number: data?.phone ?? phone ?? '',
@@ -402,8 +412,8 @@
           await openMonnifyModal({
             apiKey,
             contractCode: resolvedContractCode,
-            amount,
-            currency,
+            amount: displayAmount,
+            currency: displayCurrency,
             reference: state.paymentIntent.reference ?? state.paymentIntent.id,
             customerName: (metadata?.customer_name as string) ?? email ?? '',
             customerEmail: email ?? '',
@@ -419,7 +429,7 @@
           const apiEndpointUrl = `${baseUrl}/v1/payments/${state.paymentIntent.id}/mpesa`;
           await initiateMPesaSTKPush({
             phoneNumber: data?.phone ?? phone ?? '',
-            amount,
+            amount: displayAmount,
             reference: state.paymentIntent.reference ?? state.paymentIntent.id,
             description: `Payment ${state.paymentIntent.reference ?? ''}`,
             onInitiated: () => {},
@@ -473,7 +483,28 @@
     }
   }
 
+  /**
+   * Mirrors the core client's guard, but locally so a misconfigured checkout reports
+   * itself before the shopper has clicked anything.
+   */
+  function hasChargeableConfig(): boolean {
+    return (
+      Boolean(sessionSecret) ||
+      Boolean(initialPaymentIntent) ||
+      Boolean(paymentLinkCode) ||
+      (typeof amount === 'number' && Boolean(currency))
+    );
+  }
+
   onMount(() => {
+    if (!hasChargeableConfig()) {
+      dispatch('error', {
+        code: 'invalid_checkout_config',
+        message: 'amount and currency are required when creating a payment intent in the browser.',
+      });
+      return;
+    }
+
     // Initial initialization if isOpen is already true
     if (isOpen) {
       store.initialize();
