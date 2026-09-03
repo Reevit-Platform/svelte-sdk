@@ -2,12 +2,86 @@
 
 All notable changes to `@reevit/svelte` will be documented in this file.
 
-## [Unreleased] - 2026-02-04
+## [0.10.2] - 2026-07-18
+
+### Changed
+
+- Publishing moved to npm trusted publishing and the provenance repository
+  field was corrected. No source changes.
+
+## [0.10.1] - 2026-07-18
+
+### Fixed
+
+- Paystack is driven through the Inline v2 instance API and resumes
+  backend-initialized transactions instead of creating a new one.
+- The PSP script loader no longer touches `document` during SSR.
+
+### Changed
+
+- CI resolves `@reevit/core` from the npm registry instead of a `../core` link.
+- CI workflows migrated to Blacksmith runners.
+
+> Tag note: the `0.10.0` and `0.10.1` tags both point at `1a59366`, whose
+> `package.json` still reads `0.10.0`. The manifest bump to `0.10.1` landed
+> later, at `eae9254`.
+
+## [0.10.0] - 2026-05-15
+
+### Changed
+
+- Checkout UI redesigned onto the brutalist design system: reworked
+  `ReevitCheckout` and `MobileMoneyForm`, a new `LoadingState` component and a
+  rewritten stylesheet.
+
+## [0.9.0] - 2026-05-15
+
+### Added
+
+- Checkout session support in the Reevit store.
+
+### Changed
+
+- Publish workflow handles a prerelease `@reevit/core`.
+
+## [0.8.1] - 2026-03-13
+
+### Changed
+
+- Re-compressed the bundled M-Pesa logo (117 KB to 6 KB).
+- Payment method selector adjustment.
+
+## [0.8.0] - 2026-03-03
+
+### Changed
+
+- Aligned the Hubtel callback and provider reference flow.
+
+## [0.7.0] - 2026-02-07
+
+Internal changes — `@reevit/core` dependency bump and version alignment across
+the Reevit SDKs.
+
+## [0.6.0] - 2026-02-04
 
 ### 🛠 Improvements
 
 - Added `idempotencyKey` support in checkout config and intent initialization.
 - Added in-flight dedupe for payment intent creation.
+
+## [0.5.9] - 2026-01-21
+
+### Changed
+
+- Reworked `ReevitCheckout`, the Reevit store, the PSP bridge loaders and the
+  widget stylesheet. The originating commit message does not describe the
+  change further.
+
+## [0.5.1] - 2026-01-17
+
+### Changed
+
+- Widget stylesheet updates.
 
 ## [0.5.0] - 2026-01-11
 
