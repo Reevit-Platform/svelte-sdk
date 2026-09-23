@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import { createReevitStore } from '../stores/reevit';
-  import { createThemeVariables, cn, createReevitClient, detectCountryFromCurrency, formatAmount } from '@reevit/core';
+  import { createThemeVariables, cn, detectCountryFromCurrency, formatAmount } from '@reevit/core';
   import type {
     ReevitTheme,
     PaymentIntent,
@@ -302,7 +302,11 @@
     selectedProvider = null;
   }
 
+  let hubtelCheckout: { cancel: () => void } | null = null;
+
   function handleClose(): void {
+    hubtelCheckout?.cancel();
+    hubtelCheckout = null;
     clearSuccessTimeout();
     isOpen = false;
     selectedProvider = null;
@@ -339,37 +343,17 @@
           break;
         }
         case 'hubtel': {
-          const merchantAccount = state.paymentIntent.pspCredentials?.merchantAccount;
-          const client = createReevitClient({ publicKey, baseUrl: apiBaseUrl });
-          const { data: session, error: sessionError } = await client.createHubtelSession(
-            state.paymentIntent.id,
-            state.paymentIntent.clientSecret
-          );
-          if (sessionError || !session?.basicAuth) {
-            dispatch('error', {
-              code: sessionError?.code || 'hubtel_session_error',
-              message: sessionError?.message || 'Failed to create Hubtel session',
-            });
-            return;
-          }
-
-          const hubtelPreferredMethod =
-            state.selectedMethod === 'card' || state.selectedMethod === 'mobile_money'
-              ? state.selectedMethod
-              : undefined;
-
-          await openHubtelPopup({
-            clientId: (session.merchantAccount as string) || (typeof merchantAccount === 'string' ? merchantAccount : publicKey ?? ''),
-            purchaseDescription: `Payment for ${displayAmount} ${displayCurrency}`,
-            amount: displayAmount,
+          // Opens the hosted checkout the Reevit API created; no Hubtel
+          // credentials are used in the browser.
+          hubtelCheckout?.cancel();
+          hubtelCheckout = await openHubtelPopup({
+            paymentId: state.paymentIntent.id,
+            clientSecret: state.paymentIntent.clientSecret,
+            publicKey,
             apiBaseUrl,
-            callbackUrl: `${apiBaseUrl || 'https://api.reevit.io'}/v1/webhooks/incoming/hubtel`,
             clientReference: state.paymentIntent.providerRefId || state.paymentIntent.reference || state.paymentIntent.id,
-            customerPhone: data?.phone ?? phone ?? '',
-            customerEmail: email ?? '',
-            basicAuth: session.basicAuth,
-            preferredMethod: hubtelPreferredMethod,
             onSuccess: (res) => store.handlePspSuccess(res),
+            onError: (err) => store.handlePspError(err),
             onClose: () => {},
           });
           break;
@@ -512,6 +496,8 @@
   });
 
   onDestroy(() => {
+    hubtelCheckout?.cancel();
+    hubtelCheckout = null;
     if (typeof document !== 'undefined') {
       document.body.style.overflow = '';
     }
