@@ -1,6 +1,6 @@
 {
   "name": "@reevit/svelte",
-  "version": "0.10.2",
+  "version": "0.11.0",
   "description": "Unified Payment Widget for Svelte Applications",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
