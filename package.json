@@ -24,7 +24,8 @@
     "dev": "vite build --watch",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:package": "npm run build && node scripts/check-packed-package.mjs"
   },
   "keywords": [
     "reevit",

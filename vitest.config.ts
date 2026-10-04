@@ -9,5 +9,12 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     restoreMocks: true,
+    // Re-process the packed fixture through Vite so its Svelte imports use
+    // the same browser module graph as Testing Library's mount function.
+    server: {
+      deps: {
+        inline: [/\.reevit-checkout-package-/],
+      },
+    },
   },
 });

@@ -20,7 +20,10 @@ export default defineConfig({
       formats: ['es', 'cjs'],
     },
     rollupOptions: {
-      external: ['svelte', '@reevit/core'],
+      // Compiled components import svelte/internal/client as well as svelte.
+      // Keep every entry on the consumer's runtime; bundling the internal
+      // entry creates a second context that cannot be mounted by the host.
+      external: (id) => id === '@reevit/core' || id === 'svelte' || id.startsWith('svelte/'),
       output: {
         globals: {
           svelte: 'Svelte',
