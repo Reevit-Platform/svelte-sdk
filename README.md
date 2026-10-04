@@ -292,3 +292,11 @@ const result = await initiateMPesaSTKPush(
 ## License
 
 MIT © Reevit
+
+## Runtime compatibility
+
+This SDK's built components require **Svelte 5**. Version 0.11.1 corrects the
+previous Svelte 4 peer claim and shares all `svelte/internal/*` imports with
+the consumer's runtime. Upgrade Svelte 4 applications before using this
+release. Run `npm run test:package` to verify the archive on the declared
+runtime before publishing.

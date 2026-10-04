@@ -12,6 +12,9 @@ try {
   symlinkSync(resolve('node_modules'), join(dir, 'node_modules'), 'dir');
   const pkg = JSON.parse(readFileSync(join(dir, 'package/package.json'), 'utf8'));
   assert.equal(pkg.version, manifest.version);
+  assert.equal(pkg.peerDependencies.svelte, '^5.0.0', 'compiled components require Svelte 5');
+  const entry = readFileSync(join(dir, 'package/dist/index.mjs'), 'utf8');
+  assert.match(entry, /from "svelte\/internal\/client"/, 'Svelte internal runtime must stay external');
   for (const file of ['dist/index.js', 'dist/index.mjs', 'dist/index.d.ts']) {
     assert.ok(existsSync(join(dir, 'package', file)), `missing ${file}`);
   }
