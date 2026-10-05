@@ -1,7 +1,9 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import ReevitCheckout from './ReevitCheckout.svelte';
+const ReevitCheckout = process.env.REEVIT_PACKED_ENTRY
+  ? (await import(/* @vite-ignore */ process.env.REEVIT_PACKED_ENTRY)).ReevitCheckout
+  : (await import('./ReevitCheckout.svelte')).default;
 
 const SESSION_SECRET = 'cs_checkout_session_secret';
 
@@ -140,5 +142,43 @@ describe('ReevitCheckout with Hubtel', () => {
       expect(fetchMock.mock.calls.filter((call) => String(call[0]).includes('/confirm-intent')).length).toBeGreaterThanOrEqual(3)
     );
     expect(document.body.innerHTML).not.toContain('basicAuth');
+  });
+});
+
+describe('ReevitCheckout with Flutterwave', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete window.FlutterwaveCheckout;
+  });
+
+  it.each([
+    ['GHS', 5012, 50.12],
+    ['NGN', 5012, 50.12],
+    ['XOF', 5000, 5000],
+    ['XAF', 5000, 5000],
+  ])('converts the %s intent amount only at the gateway boundary', async (currency, minor, major) => {
+    const checkout = vi.fn();
+    window.FlutterwaveCheckout = checkout;
+    if (!document.getElementById('flutterwave-script')) {
+      const script = document.createElement('script');
+      script.id = 'flutterwave-script';
+      document.head.appendChild(script);
+    }
+    const session = sessionResponse('flutterwave-secret');
+    session.payment_intent.amount = minor;
+    session.payment_intent.currency = currency;
+    session.payment_intent.provider = 'flutterwave';
+    session.payment_intent.available_psps = [{ provider: 'flutterwave', name: 'Flutterwave', methods: ['card'] }];
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(session), { status: 200 })));
+
+    render(ReevitCheckout, { props: {
+      isOpen: true, sessionSecret: `cs_flutterwave_${currency}`, paymentMethods: ['card'], email: 'shopper@example.com',
+    } });
+    const makePayment = (await screen.findByText('MAKE PAYMENT')).closest('button') as HTMLButtonElement;
+    await waitFor(() => expect(makePayment.disabled).toBe(false));
+    await fireEvent.click(makePayment);
+
+    await waitFor(() => expect(checkout).toHaveBeenCalledTimes(1));
+    expect(checkout.mock.calls[0][0]).toMatchObject({ amount: major, currency });
   });
 });

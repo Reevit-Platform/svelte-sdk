@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import { createReevitStore } from '../stores/reevit';
+  import { toFlutterwaveAmount } from '../bridges/flutterwaveAmount';
   import { createThemeVariables, cn, detectCountryFromCurrency, formatAmount } from '@reevit/core';
   import type {
     ReevitTheme,
@@ -362,7 +363,7 @@
           await openFlutterwaveModal({
             public_key: state.paymentIntent.pspPublicKey ?? publicKey ?? '',
             tx_ref: state.paymentIntent.id,
-            amount: displayAmount,
+            amount: toFlutterwaveAmount(displayAmount, displayCurrency),
             currency: displayCurrency,
             customer: {
               email: email ?? '',

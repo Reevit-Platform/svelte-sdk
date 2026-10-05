@@ -2,6 +2,18 @@
 
 All notable changes to `@reevit/svelte` will be documented in this file.
 
+## [0.11.1] - Unreleased
+
+### Fixed
+
+- Flutterwave checkout converts Reevit minor units using the currency exponent. A 5,012 GHS intent requests 50.12 GHS; a 5,000 XOF intent requests 5,000 XOF.
+- The exported `openFlutterwaveModal` helper retains Flutterwave's major-unit config contract; the widget performs conversion before calling it.
+- Keep `svelte/internal/*` external in the package build so checkout components mount on the consumer's Svelte runtime.
+
+### Compatibility
+
+- The built component requires Svelte 5 (`svelte/internal/client`). The peer range now declares `^5.0.0`; the previous Svelte 4 claim was incompatible with this compiled artifact. Svelte 4 projects must upgrade their runtime before adopting this release.
+
 ## [0.11.0] - 2026-09-24
 
 ### Security
