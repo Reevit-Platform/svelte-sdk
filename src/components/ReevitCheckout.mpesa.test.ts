@@ -283,9 +283,15 @@ describe('ReevitCheckout never treats a pending payment as paid', () => {
       resumeTransaction = resumeTransaction;
     } as any;
     let poll = 0;
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(confirm(++poll)), { status: 200 })));
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+      String(input).includes('/confirm-intent')
+        ? new Response(JSON.stringify(confirm(++poll)), { status: 200 })
+        : new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
     const onSuccess = vi.fn();
     const onError = vi.fn();
+    const onClose = vi.fn();
+    const onStateChange = vi.fn();
     render(ReevitCheckout, {
       props: {
         isOpen: true,
@@ -303,38 +309,67 @@ describe('ReevitCheckout never treats a pending payment as paid', () => {
           availableProviders: [{ provider: 'paystack', name: 'Paystack', methods: ['card'] }],
         } as any,
       },
-      events: { success: onSuccess, error: onError },
+      events: { success: onSuccess, error: onError, close: onClose, stateChange: onStateChange },
     });
     await fireEvent.click(screen.getByRole('button', { name: 'Card' }));
     await flush();
     resumeTransaction.mock.calls[0][1].onSuccess({ reference: 'ref_1', trans: '1', status: 'success', message: 'ok', transaction: 't', trxref: 'ref_1' });
     await flush();
-    return { onSuccess, onError };
+    const states = () => onStateChange.mock.calls.map((c) => c[0].detail);
+    return { onSuccess, onError, onClose, states, fetchMock };
   }
 
-  it('keeps checking while the backend says pending, and succeeds once it says succeeded', async () => {
-    const { onSuccess } = await providerSaysPaid((poll) => ({ id: 'pay_mock_1', status: poll >= 3 ? 'succeeded' : 'pending' }));
-    expect(onSuccess).not.toHaveBeenCalled();
+  it('shows a calm Confirming state with no Try again, keeps polling, and succeeds once it says succeeded', async () => {
+    const { onSuccess, onError, states, fetchMock } = await providerSaysPaid((poll) => ({ id: 'pay_mock_1', status: poll >= 4 ? 'succeeded' : 'pending' }));
 
-    await advance(2500);
+    expect(screen.getByText('Confirming your payment')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(q('failure')).toBeNull();
+    expect(states()).toContain('confirming');
+
+    await advance(4000);
+    await advance(4000);
     expect(onSuccess).not.toHaveBeenCalled();
-    await advance(2500);
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    await advance(4000);
 
     expect(onSuccess).toHaveBeenCalledTimes(1);
     expect(onSuccess.mock.calls[0][0].detail).toMatchObject({ status: 'success' });
+    expect(onError).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).includes('/confirm-intent')).length).toBe(4);
   });
 
-  it('reports an error, not success, when the backend is still pending after the wait', async () => {
-    const { onSuccess, onError } = await providerSaysPaid(() => ({ id: 'pay_mock_1', status: 'pending' }));
+  it('can be closed while confirming, without cancelling the payment or asking to stay', async () => {
+    const { onSuccess, onClose, fetchMock } = await providerSaysPaid(() => ({ id: 'pay_mock_1', status: 'pending' }));
 
-    await advance(25_000);
+    await fireEvent.click(q('close') as HTMLElement);
+    await flush();
 
+    expect(q('leave')).toBeNull();
+    expect(onClose).toHaveBeenCalled();
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/cancel'))).toBe(false);
     expect(onSuccess).not.toHaveBeenCalled();
-    expect(onError.mock.calls[0][0].detail).toMatchObject({ code: 'PAYMENT_NOT_CONFIRMED' });
-    expect(q('failure')).not.toBeNull();
   });
 
-  it('shows the failure panel, not a receipt, when the backend says the payment failed', async () => {
+  it('at the deadline shows a non-retry still-confirming panel and calls neither onSuccess nor onError', async () => {
+    const { onSuccess, onError, onClose, states } = await providerSaysPaid(() => ({ id: 'pay_mock_1', status: 'pending' }));
+
+    await advance(119_000);
+    expect(screen.getByText('Confirming your payment')).toBeTruthy();
+    await advance(6_000);
+
+    expect(screen.getByText('We’re still confirming this payment')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(states()).toContain('pending');
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onClose).toHaveBeenCalled();
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it('shows the failure panel when the backend says the payment failed', async () => {
     const { onSuccess, onError } = await providerSaysPaid(() => ({ id: 'pay_mock_1', status: 'failed' }));
 
     expect(onSuccess).not.toHaveBeenCalled();

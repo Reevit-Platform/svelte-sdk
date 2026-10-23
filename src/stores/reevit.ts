@@ -30,9 +30,19 @@ import { isPaymentFailure, pollPaymentStatus } from '../utils/pollPaymentStatus'
 
 const DEFAULT_PUBLIC_API_BASE_URL = 'https://api.reevit.io';
 
-/** How long a provider's own "success" waits for the backend to agree before it is not treated as paid. */
-const SETTLE_TIMEOUT_MS = 20_000;
-const SETTLE_INTERVAL_MS = 2_500;
+/**
+ * After the provider reports success the backend can still say `pending` for a while
+ * (webhooks and verification are slow). Keep asking, calmly, for up to two minutes.
+ */
+const CONFIRM_TIMEOUT_MS = 120_000;
+const CONFIRM_INTERVAL_MS = 4_000;
+
+/** `confirming`: the provider said paid, the backend has not agreed yet. `unconfirmed`: it still had not at the deadline. */
+export type Confirmation = 'idle' | 'confirming' | 'unconfirmed';
+/** The core states, plus the two the checkout reports while a paid provider payment is unconfirmed. */
+export type ReevitStateChange = CheckoutState | 'confirming' | 'pending';
+/** What the store publishes: the core state plus the confirmation phase. */
+export type ReevitStoreState = ReevitState & { confirmation: Confirmation };
 
 function buildPaymentLinkError(response: Response, data: any): PaymentError {
   return {
@@ -51,7 +61,7 @@ interface CreateReevitStoreOptions {
   onSuccess?: (result: PaymentResult) => void;
   onError?: (error: PaymentError) => void;
   onClose?: () => void;
-  onStateChange?: (state: CheckoutState) => void;
+  onStateChange?: (state: ReevitStateChange) => void;
   apiBaseUrl?: string;
 }
 
@@ -307,7 +317,8 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
     currentIntentKey = `initial:${config.initialPaymentIntent.id}`;
   }
 
-  const subscribers = new Set<Subscriber<ReevitState>>();
+  let confirmation: Confirmation = 'idle';
+  const subscribers = new Set<Subscriber<ReevitStoreState>>();
 
   // API client
   const apiClient = new ReevitAPIClient({
@@ -317,7 +328,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
 
   // Notify subscribers
   const notify = () => {
-    subscribers.forEach((subscriber) => subscriber(state));
+    subscribers.forEach((subscriber) => subscriber({ ...state, confirmation }));
   };
 
   // Dispatch action
@@ -332,9 +343,9 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
   };
 
   // Subscribe function for Svelte store contract
-  const subscribe = (subscriber: Subscriber<ReevitState>): Unsubscriber => {
+  const subscribe = (subscriber: Subscriber<ReevitStoreState>): Unsubscriber => {
     subscribers.add(subscriber);
-    subscriber(state); // Immediately call with current value
+    subscriber({ ...state, confirmation }); // Immediately call with current value
     return () => subscribers.delete(subscriber);
   };
 
@@ -550,8 +561,9 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
 
   // Process payment after a PSP reports success.
   // The backend decides: only `succeeded` is a paid payment. A provider can say
-  // "done" before its webhook lands, so a still-pending payment is re-checked
-  // for a short while and is never reported as success.
+  // "done" before its webhook lands. While the backend says pending the buyer sees
+  // a calm "Confirming" state with no retry (they may already have been debited),
+  // and the payment is never reported as success until it has succeeded.
   const processPayment = async (paymentData: Record<string, unknown>) => {
     const intent = state.paymentIntent;
     const method = state.selectedMethod;
@@ -565,6 +577,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
     settleController = controller;
 
     const fail = (error: PaymentError) => {
+      confirmation = 'idle';
       dispatch({ type: 'PROCESS_ERROR', payload: error });
       onError?.(error);
     };
@@ -586,21 +599,24 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
 
       let confirmed = first.data;
       if (confirmed?.status !== 'succeeded' && !isPaymentFailure(confirmed?.status)) {
+        confirmation = 'confirming';
+        notify();
+        onStateChange?.('confirming');
         const settled = await pollPaymentStatus({
           check: confirm,
           signal: controller.signal,
-          intervalMs: SETTLE_INTERVAL_MS,
-          timeoutMs: SETTLE_TIMEOUT_MS,
+          intervalMs: CONFIRM_INTERVAL_MS,
+          timeoutMs: CONFIRM_TIMEOUT_MS,
         });
         if (settled.kind === 'aborted') return;
         if (settled.kind === 'timeout') {
-          fail({
-            code: 'PAYMENT_NOT_CONFIRMED',
-            message: 'We haven’t received confirmation of this payment yet. Please check with the merchant before paying again.',
-            recoverable: false,
-          });
+          // Not failed, not paid: leave it to the webhook. No retry, no onError, no onSuccess.
+          confirmation = 'unconfirmed';
+          notify();
+          onStateChange?.('pending');
           return;
         }
+        confirmation = 'idle';
         confirmed = settled.data;
       }
 
@@ -654,8 +670,9 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
   // Reset checkout
   const reset = async () => {
     settleController?.abort();
-    // Cancel the existing payment intent if it exists and is still pending
-    if (state.paymentIntent && state.status !== 'success') {
+    // Cancel the existing payment intent if it exists and is still pending, unless
+    // the provider already said it was paid: that payment must be left to settle.
+    if (state.paymentIntent && state.status !== 'success' && confirmation === 'idle') {
       try {
         await apiClient.cancelPaymentIntent(state.paymentIntent.id);
       } catch {
@@ -663,6 +680,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
       }
     }
 
+    confirmation = 'idle';
     initializing = false;
     currentIntentKey = null;
     initRequestId += 1;
@@ -672,7 +690,8 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
   // Close checkout
   const close = async () => {
     settleController?.abort();
-    if (state.paymentIntent && state.status !== 'success') {
+    // Leave a payment the provider already called paid to settle.
+    if (state.paymentIntent && state.status !== 'success' && confirmation === 'idle') {
       try {
         await apiClient.cancelPaymentIntent(state.paymentIntent.id);
       } catch {
@@ -680,6 +699,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
       }
     }
 
+    confirmation = 'idle';
     dispatch({ type: 'CLOSE' });
     onClose?.();
   };

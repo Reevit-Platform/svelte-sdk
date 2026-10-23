@@ -27,6 +27,7 @@
   import CheckoutShell from './CheckoutShell.svelte';
   import ReceiptPanel from './ReceiptPanel.svelte';
   import FailurePanel from './FailurePanel.svelte';
+  import UnconfirmedPanel from './UnconfirmedPanel.svelte';
   import MPesaPanel from './MPesaPanel.svelte';
   import StripePanel from './StripePanel.svelte';
   import {
@@ -49,12 +50,14 @@
     success: PaymentResult;
     error: { code: string; message: string };
     close: void;
+    /** Includes `confirming` and `pending` while a paid provider payment is unconfirmed. */
+    stateChange: string;
   };
 
   const dispatch = createEventDispatcher<ReevitCheckoutEvents>();
 
   type Stage = 'list' | 'phone' | 'preparing' | 'bridge';
-  type ViewId = 'loading' | 'list' | 'phone' | 'preparing' | 'bridge' | 'processing' | 'receipt' | 'failure';
+  type ViewId = 'loading' | 'list' | 'phone' | 'preparing' | 'bridge' | 'processing' | 'confirming' | 'unconfirmed' | 'receipt' | 'failure';
 
   function clearSuccessTimeout(): void {
     if (successTimeout) {
@@ -180,6 +183,7 @@
       deliverSuccess(result);
     },
     onError: (err: { code: string; message: string }) => dispatch('error', err),
+    onStateChange: (next: string) => dispatch('stateChange', next),
     onClose: () => {
       isOpen = false;
       dispatch('close');
@@ -272,6 +276,8 @@
   $: view = ((): ViewId => {
     if (state.status === 'success' && state.result) return 'receipt';
     if (showFailure) return 'failure';
+    if (state.confirmation === 'unconfirmed') return 'unconfirmed';
+    if (state.confirmation === 'confirming') return 'confirming';
     if (state.status === 'processing') return 'processing';
     if (!state.paymentIntent) return 'loading';
     if (activeStage === 'preparing') return 'preparing';
@@ -328,6 +334,8 @@
     preparing: `Opening ${pspName}`,
     bridge: `Opening ${pspName}`,
     processing: 'Processing payment',
+    confirming: 'Confirming your payment',
+    unconfirmed: 'Still confirming this payment',
     receipt: 'Payment received',
     failure: 'Payment failed',
   }[view];
@@ -718,6 +726,10 @@
         <div class="reevit-panel reevit-panel--{direction}" data-reevit="panel" data-step={panelView}>
           {#if view === 'loading'}
             <LoadingState title="Preparing checkout" />
+          {:else if view === 'confirming'}
+            <LoadingState title="Confirming your payment" message="This can take a minute. You don’t need to pay again." />
+          {:else if view === 'unconfirmed'}
+            <UnconfirmedPanel onDone={handleClose} />
           {:else if view === 'processing'}
             <LoadingState title="Processing payment" message="Please don’t close this window." />
           {:else if view === 'receipt' && state.result}
