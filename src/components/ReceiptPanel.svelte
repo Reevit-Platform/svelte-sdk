@@ -6,9 +6,11 @@
     merchantName: string;
     orderRef?: string;
     amountText: string;
+    /** One quiet line under the receipt, e.g. that a second provider took the payment. */
+    note?: string;
     onDone: () => void;
   }
-  let { reference, method, provider, merchantName, orderRef, amountText, onDone }: Props = $props();
+  let { reference, method, provider, merchantName, orderRef, amountText, note, onDone }: Props = $props();
 
   const escapeHtml = (value: string) =>
     value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
@@ -54,6 +56,7 @@
     <div><dt>Provider</dt><dd>{provider}</dd></div>
     <div><dt>Date</dt><dd class="reevit-mono">{paidAt}</dd></div>
   </dl>
+  {#if note}<p class="reevit-note" data-reevit="note">{note}</p>{/if}
   <button type="button" class="reevit-cta" data-reevit="done" data-first="" onclick={onDone}>Done</button>
   <button type="button" class="reevit-cta-secondary" data-reevit="download" onclick={download}>Download receipt</button>
 </div>

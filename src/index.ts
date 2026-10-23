@@ -14,6 +14,21 @@ export { default as MobileMoneyForm } from './components/MobileMoneyForm.svelte'
 // Stores
 export { createReevitStore, type ReevitStore } from './stores';
 
+// Direct mobile money (Reevit's own screens)
+export { createDirectCharge } from './direct/directCharge';
+export type {
+  DirectCharge,
+  DirectChargeStore,
+  DirectChargeOptions,
+  DirectChargeState,
+  DirectFailure,
+  DirectPhase,
+  DirectInput,
+} from './direct/directCharge';
+export { createDirectChargeClient } from './direct/api';
+export type { DirectChargeApi, PublicAttempt, DirectApiError } from './direct/api';
+export type { MethodOption, CheckoutProvider } from './types';
+
 // Re-export core types and utilities
 export type {
   PaymentMethod,

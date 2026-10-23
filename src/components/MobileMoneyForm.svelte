@@ -21,9 +21,21 @@
     mode?: 'network' | 'mpesa';
     /** Primary button label, e.g. "Pay GHS 755.00". */
     submitLabel?: string;
+    /** Networks the provider accepts. Omit to offer all three. */
+    networks?: string[];
+    /** A polite line above the button (an earlier prompt still active, no connection). */
+    notice?: string | null;
   }
 
-  let { initialPhone = '', loading = false, hideCancel = false, mode = 'network', submitLabel = 'Continue' }: Props = $props();
+  let {
+    initialPhone = '',
+    loading = false,
+    hideCancel = false,
+    mode = 'network',
+    submitLabel = 'Continue',
+    networks: allowedNetworks,
+    notice,
+  }: Props = $props();
 
   const dispatch = createEventDispatcher<{
     submit: MobileMoneyFormData;
@@ -120,6 +132,7 @@
   }
 
   const logos = mpesa ? [] : getMethodMarks('GH', 'mobile_money');
+  const choices = $derived(allowedNetworks?.length ? NETWORKS.filter((n) => allowedNetworks.includes(n.id)) : NETWORKS);
   const suffix = mpesa ? getMethodMarks('KE', 'mobile_money')[0] : undefined;
 </script>
 
@@ -156,7 +169,7 @@
       <fieldset class="reevit-group">
         <legend>Network</legend>
         <div class="reevit-networks">
-          {#each NETWORKS as n (n.id)}
+          {#each choices as n (n.id)}
             {@const logo = logos.find((mark) => mark.key === n.id)}
             <button
               type="button"
@@ -176,6 +189,8 @@
         {#if networkError}<p class="reevit-error" id={networkErrorId} role="alert">{networkError}</p>{/if}
       </fieldset>
     {/if}
+
+    {#if notice}<p class="reevit-status" data-reevit="status" role="status" aria-live="polite">{notice}</p>{/if}
 
     <button type="submit" class="reevit-cta" data-reevit="cta" disabled={loading}>
       {loading ? 'Please wait' : submitLabel}
