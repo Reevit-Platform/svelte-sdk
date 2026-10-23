@@ -227,13 +227,14 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
     return () => subscribers.delete(subscriber);
   };
 
-  // Initialize payment intent
+  // Initialize payment intent. Resolves with the intent, or undefined when it could
+  // not be created (the error is in the store state) or the request was superseded.
   const initialize = async (
     method?: PaymentMethod,
     options?: { preferredProvider?: string; allowedProviders?: string[] }
-  ) => {
+  ): Promise<PaymentIntent | undefined> => {
     if (config.initialPaymentIntent) {
-      return;
+      return state.paymentIntent ?? undefined;
     }
 
     let requestId = 0;
@@ -258,7 +259,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
       intentKey = idempotencyKey;
 
       if (currentIntentKey === idempotencyKey && state.paymentIntent) {
-        return;
+        return state.paymentIntent;
       }
 
       currentIntentKey = idempotencyKey;
@@ -362,6 +363,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
       const paymentIntent = mapToPaymentIntent(data, { ...config, reference, idempotencyKey });
       dispatch({ type: 'INIT_SUCCESS', payload: paymentIntent });
       // Don't reset initializing here - once initialized, stay initialized until reset()
+      return paymentIntent;
     } catch (err) {
       if (intentKey) {
         clearIntentCacheEntry(intentKey);

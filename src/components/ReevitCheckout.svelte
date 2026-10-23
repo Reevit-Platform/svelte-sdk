@@ -1,59 +1,49 @@
 <script lang="ts">
+  /**
+   * ReevitCheckout
+   * Main checkout component that orchestrates the payment flow.
+   *
+   * The shopper sees one list of payment methods. Reevit picks the processor:
+   * the recommended one when it supports the chosen method, otherwise the first
+   * connected one that does.
+   */
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import { createReevitStore } from '../stores/reevit';
   import { toFlutterwaveAmount } from '../bridges/flutterwaveAmount';
-  import { createThemeVariables, cn, detectCountryFromCurrency, formatAmount } from '@reevit/core';
+  import { createThemeVariables, formatAmount } from '@reevit/core';
   import type {
     ReevitTheme,
     PaymentIntent,
     PaymentResult,
     PaymentMethod,
-    PSPType,
+    PaymentError,
+    MobileMoneyFormData,
     CheckoutProviderOption,
   } from '@reevit/core';
   import MobileMoneyForm from './MobileMoneyForm.svelte';
   import LoadingState from './LoadingState.svelte';
+  import MethodList from './MethodList.svelte';
+  import PanelHead from './PanelHead.svelte';
+  import CheckoutShell from './CheckoutShell.svelte';
+  import ReceiptPanel from './ReceiptPanel.svelte';
+  import FailurePanel from './FailurePanel.svelte';
+  import MPesaPanel from './MPesaPanel.svelte';
+  import StripePanel from './StripePanel.svelte';
   import {
     openPaystackPopup,
     openHubtelPopup,
     openFlutterwaveModal,
     openMonnifyModal,
-    initiateMPesaSTKPush,
   } from '../bridges';
-
-  import flutterwaveLogo from '../assets/providers/flutterwave.png';
-  import hubtelLogo from '../assets/providers/hubtel.png';
-  import monnifyLogo from '../assets/providers/monnify.png';
-  import mpesaLogo from '../assets/providers/mpesa.png';
-  import paystackLogo from '../assets/providers/paystack.png';
-  import stripeLogo from '../assets/providers/stripe.png';
-
-  /** PSP brand logos, keyed by provider id. */
-  const PROVIDER_LOGOS: Record<string, string | undefined> = {
-    paystack: paystackLogo,
-    hubtel: hubtelLogo,
-    flutterwave: flutterwaveLogo,
-    monnify: monnifyLogo,
-    mpesa: mpesaLogo,
-    stripe: stripeLogo,
-  };
-
-  /** Short terminal-style code per payment method, used in the `NN / CODE` id line. */
-  const METHOD_CODE: Record<PaymentMethod, string> = {
-    card: 'CARD',
-    mobile_money: 'MOMO',
-    bank_transfer: 'BANK',
-    apple_pay: 'APAY',
-    google_pay: 'GPAY',
-  };
-
-  const METHOD_NAME: Record<PaymentMethod, string> = {
-    card: 'CARD',
-    mobile_money: 'MOBILE MONEY',
-    bank_transfer: 'BANK TRANSFER',
-    apple_pay: 'APPLE PAY',
-    google_pay: 'GOOGLE PAY',
-  };
+  import {
+    METHOD_LABEL,
+    METHOD_ORDER,
+    PROVIDER_FOOTER,
+    formatMoney,
+    getCountryFromCurrency,
+    titleCase,
+    type FooterProvider,
+  } from '../ledger';
 
   type ReevitCheckoutEvents = {
     success: PaymentResult;
@@ -62,6 +52,9 @@
   };
 
   const dispatch = createEventDispatcher<ReevitCheckoutEvents>();
+
+  type Stage = 'list' | 'phone' | 'preparing' | 'bridge';
+  type ViewId = 'loading' | 'list' | 'phone' | 'preparing' | 'bridge' | 'processing' | 'receipt' | 'failure';
 
   function clearSuccessTimeout(): void {
     if (successTimeout) {
@@ -92,22 +85,26 @@
   export let apiBaseUrl: string | undefined = undefined;
   export let initialPaymentIntent: PaymentIntent | undefined = undefined;
   export let successDelayMs: number = 5000;
+
   let resolvedTheme: ReevitTheme = {};
-  let selectedTheme:
-    | {
-        backgroundColor?: string;
-        textColor?: string;
-        descriptionColor?: string;
-        borderColor?: string;
-      }
-    | undefined = undefined;
-  let fallbackCountry: string = 'GH';
   let successTimeout: ReturnType<typeof setTimeout> | null = null;
-  let selectedProvider: PSPType | null = null;
-  let activeProvider: PSPType = 'paystack';
-  let configuredMethods: PaymentMethod[] = ['card', 'mobile_money'];
-  let providerOptions: CheckoutProviderOption[] = [];
-  let availableMethods: PaymentMethod[] = configuredMethods;
+
+  // Flow state
+  let stage: Stage = 'list';
+  let momoData: MobileMoneyFormData | null = null;
+  let selectedProvider: string | null = null;
+  let pspError: PaymentError | null = null;
+  let confirmLeave = false;
+  let hubtelOpen = false;
+  /** onSuccess is delivered exactly once per payment: by the timer, Done, or closing the receipt. */
+  let successDelivered = false;
+  /** Guards double taps while an intent is being created. */
+  let picking = false;
+  /** Bumped when the shopper backs out, so a stale intent response cannot reopen a provider window. */
+  let pickToken = 0;
+  /** Bumped whenever a provider window is left, so its late callbacks are ignored. */
+  let bridgeToken = 0;
+  let hubtelCheckout: { cancel: () => void } | null = null;
 
   const pspNames: Record<string, string> = {
     hubtel: 'Hubtel',
@@ -135,6 +132,15 @@
     initialPaymentIntent: PaymentIntent | undefined;
   }
 
+  function deliverSuccess(result: PaymentResult): void {
+    clearSuccessTimeout();
+    if (!successDelivered) {
+      successDelivered = true;
+      dispatch('success', result);
+    }
+    handleClose();
+  }
+
   const store = createReevitStore({
     config: {
       publicKey,
@@ -154,17 +160,16 @@
     } as StoreConfig,
     apiBaseUrl,
     onSuccess: (result: PaymentResult) => {
+      successDelivered = false;
       clearSuccessTimeout();
-      if (successDelayMs <= 0) {
-        dispatch('success', result);
-        handleClose();
+      if (successDelayMs > 0) {
+        successTimeout = setTimeout(() => {
+          successTimeout = null;
+          deliverSuccess(result);
+        }, successDelayMs);
         return;
       }
-      successTimeout = setTimeout(() => {
-        dispatch('success', result);
-        handleClose();
-        successTimeout = null;
-      }, successDelayMs);
+      deliverSuccess(result);
     },
     onError: (err: { code: string; message: string }) => dispatch('error', err),
     onClose: () => {
@@ -179,79 +184,51 @@
     ...(theme || {}),
   };
   $: themeVars = createThemeVariables(resolvedTheme);
-  $: selectedTheme = {
-    backgroundColor: resolvedTheme.selectedBackgroundColor,
-    textColor: resolvedTheme.selectedTextColor,
-    descriptionColor: resolvedTheme.selectedDescriptionColor,
-    borderColor: resolvedTheme.selectedBorderColor,
-  };
-  $: fallbackCountry = detectCountryFromCurrency(displayCurrency);
-  $: activeProvider = selectedProvider || state.paymentIntent?.recommendedPsp || 'paystack';
-  $: configuredMethods = paymentMethods?.length ? paymentMethods : ['card', 'mobile_money'];
-  $: providerOptions = (() => {
-    const intent = state.paymentIntent;
-    if (!intent) return [];
-    const allowed = new Set(configuredMethods);
-    const options = (intent.availableProviders || [])
-      .map((provider) => {
-        const sanitizedMethods = provider.provider.toLowerCase().includes('hubtel')
-          ? provider.methods.filter((method) => method === 'card' || method === 'mobile_money')
-          : provider.methods;
+  $: configuredMethods = (paymentMethods?.length ? paymentMethods : ['card', 'mobile_money']) as PaymentMethod[];
 
-        return {
-          ...provider,
-          methods: sanitizedMethods.filter((method) => allowed.has(method)),
-        };
+  $: providerOptions = ((): CheckoutProviderOption[] => {
+    const intent = state.paymentIntent;
+    const available = intent?.availableProviders ?? [];
+    const fallbackProvider = intent?.recommendedPsp
+      ? [{ provider: intent.recommendedPsp, name: titleCase(intent.recommendedPsp), methods: configuredMethods }]
+      : [];
+    const options = available.length > 0 ? available : fallbackProvider;
+
+    return options
+      .map((provider) => {
+        const methods = provider.methods && provider.methods.length > 0 ? provider.methods : configuredMethods;
+        const sanitizedMethods = provider.provider.toLowerCase().includes('hubtel')
+          ? methods.filter((method) => method === 'card' || method === 'mobile_money')
+          : methods;
+        return { ...provider, methods: sanitizedMethods.filter((method) => configuredMethods.includes(method)) };
       })
       .filter((provider) => provider.methods.length > 0);
-
-    if (options.length > 0) return options;
-
-    const fallbackMethods = intent.recommendedPsp.toLowerCase().includes('hubtel')
-      ? configuredMethods.filter((method) => method === 'card' || method === 'mobile_money')
-      : configuredMethods;
-
-    return [
-      {
-        provider: intent.recommendedPsp,
-        name: pspNames[intent.recommendedPsp] || intent.recommendedPsp,
-        methods: fallbackMethods,
-      },
-    ];
-  })();
-  $: availableMethods = (() => {
-    const option = providerOptions.find((provider) => provider.provider === activeProvider);
-    return option?.methods.length ? option.methods : configuredMethods;
   })();
 
-  $: if (providerOptions.length > 0) {
-    // If we have a selected provider that's still valid, keep it
-    if (selectedProvider && providerOptions.some((provider) => provider.provider === selectedProvider)) {
-      // Keep it
-    } else {
-      // Only auto-select if there's exactly one provider
-      if (providerOptions.length === 1) {
-        selectedProvider = providerOptions[0].provider as PSPType;
-      } else {
-        selectedProvider = null;
-      }
-    }
-  }
-
-  $: if (state.selectedMethod && availableMethods.length > 0 && !availableMethods.includes(state.selectedMethod)) {
-    store.selectMethod(availableMethods[0]);
-  }
-
-  // Reactive booleans for template - using store getters to avoid type narrowing
-  $: storeIsLoading = store.isLoading();
-  $: storeIsProcessing = store.getStatus() === 'processing';
-  $: storeIsMethodSelected = store.getStatus() === 'method_selected';
-
-  // Brutalist display derivations
   $: displayAmount = state.paymentIntent?.amount ?? amount ?? 0;
   $: displayCurrency = state.paymentIntent?.currency ?? currency ?? 'GHS';
+
+  /** The union of methods across every connected provider, in display order. */
+  $: methodList = METHOD_ORDER.filter((method) => providerOptions.some((provider) => provider.methods.includes(method)));
+
+  /** Reevit's routing choice for a method: the recommended provider if it supports it, else the first that does. */
+  function providerFor(method: PaymentMethod): CheckoutProviderOption | undefined {
+    const recommended = state.paymentIntent?.recommendedPsp?.toLowerCase();
+    return (
+      providerOptions.find((p) => p.provider.toLowerCase() === recommended && p.methods.includes(method)) ||
+      providerOptions.find((p) => p.methods.includes(method))
+    );
+  }
+
+  // The only method is M-Pesa mobile money: skip the list and ask for the number.
+  $: soleMethod = methodList.length === 1 ? methodList[0] : null;
+  $: soleProvider = soleMethod ? providerFor(soleMethod) : undefined;
+  $: directPhone = soleMethod === 'mobile_money' && !!soleProvider?.provider.toLowerCase().includes('mpesa');
+  $: activeStage = (stage === 'list' && directPhone ? 'phone' : stage) as Stage;
+
+  // Theme
   $: brandName = resolvedTheme?.companyName;
-  $: dataTheme = (() => {
+  $: dataTheme = ((): 'light' | 'dark' | undefined => {
     const mode = resolvedTheme?.darkMode;
     if (typeof mode === 'boolean') {
       return mode ? 'dark' : 'light';
@@ -262,30 +239,90 @@
     }
     return undefined;
   })();
-  $: themeStyles = (() => {
-    const vars: Record<string, string> = {};
-    if (resolvedTheme?.buttonBackgroundColor) {
-      vars['--rb-accent'] = resolvedTheme.buttonBackgroundColor;
-    }
-    if (resolvedTheme?.buttonTextColor) {
-      vars['--rb-accent-text'] = resolvedTheme.buttonTextColor;
-    }
-    return Object.entries(vars)
-      .map(([k, v]) => `${k}:${v}`)
-      .join(';');
+  // The Ledger palette is fixed, but a merchant-supplied button colour still drives the primary action.
+  $: themeStyles = [
+    resolvedTheme?.buttonBackgroundColor ? `--rv-cta-bg:${resolvedTheme.buttonBackgroundColor}` : '',
+    resolvedTheme?.buttonTextColor ? `--rv-cta-fg:${resolvedTheme.buttonTextColor}` : '',
+  ]
+    .filter(Boolean)
+    .join(';');
+
+  $: psp = selectedProvider || state.paymentIntent?.recommendedPsp || 'paystack';
+  $: pspLower = psp.toLowerCase();
+  $: pspName = providerOptions.find((p) => p.provider.toLowerCase() === pspLower)?.name || titleCase(psp);
+  $: country = getCountryFromCurrency(displayCurrency);
+  // The merchant's own order reference. A backend reference that is only the payment/provider id is noise.
+  $: intentRef = state.paymentIntent?.reference;
+  $: orderRef =
+    reference ||
+    (intentRef && intentRef !== state.paymentIntent?.id && intentRef !== state.paymentIntent?.providerRefId
+      ? intentRef
+      : undefined);
+
+  // Which view is on screen
+  $: showFailure = (state.status === 'failed' && !!state.error) || !!pspError;
+  $: view = ((): ViewId => {
+    if (state.status === 'success' && state.result) return 'receipt';
+    if (showFailure) return 'failure';
+    if (state.status === 'processing') return 'processing';
+    if (!state.paymentIntent) return 'loading';
+    if (activeStage === 'preparing') return 'preparing';
+    if (activeStage === 'bridge') return 'bridge';
+    if (activeStage === 'phone') return 'phone';
+    return 'list';
   })();
-  $: activeProviderId = activeProvider;
-  $: needsMomoForm =
-    state.selectedMethod === 'mobile_money' && activeProvider.toLowerCase().includes('mpesa') && !phone;
 
-  // CTA handler — routes the chosen method/provider into the PSP bridge.
-  function handleContinue(): void {
-    if (!state.selectedMethod) return;
-    void handleProcessPayment(null);
+  // Slide direction: forward into a detail panel, back to the list, fade otherwise.
+  // Decided once per view so a later re-render never restarts the animation.
+  // Waiting for the intent and showing the provider's own opening line are one panel to the eye.
+  let lastPanelView: ViewId | null = null;
+  let panelDirection: 'forward' | 'back' | 'fade' = 'fade';
+  function directionFor(next: ViewId): 'forward' | 'back' | 'fade' {
+    if (lastPanelView === null) {
+      lastPanelView = next;
+      return 'fade';
+    }
+    if (lastPanelView !== next) {
+      const from = lastPanelView;
+      const isDetail = (v: ViewId) => v === 'phone' || v === 'preparing' || v === 'bridge';
+      panelDirection = next === 'list' && isDetail(from) ? 'back' : isDetail(next) && from === 'list' ? 'forward' : 'fade';
+      lastPanelView = next;
+    }
+    return panelDirection;
   }
+  $: panelView = (view === 'preparing' ? 'bridge' : view) as ViewId;
+  $: direction = directionFor(panelView);
 
-  // NOTE: Auto-advance logic removed to allow users to see and select payment methods
-  // Users must explicitly click a "Pay" button to proceed to the PSP bridge
+  // A payment is in flight while a provider window is open or the result is being confirmed.
+  $: inFlight = view === 'bridge' || view === 'processing';
+  // The confirmation only makes sense while a payment is still in flight.
+  $: if (confirmLeave && !inFlight) confirmLeave = false;
+
+  $: footerProvider = ((): FooterProvider | null => {
+    const recommended = state.paymentIntent?.recommendedPsp?.toLowerCase();
+    const id = (
+      selectedProvider ||
+      providerOptions.find((p) => p.provider.toLowerCase() === recommended)?.provider ||
+      providerOptions[0]?.provider ||
+      ''
+    ).toLowerCase();
+    const mark = PROVIDER_FOOTER[id];
+    if (!mark?.src) return null;
+    return { id, name: titleCase(id), src: mark.src, kind: mark.kind };
+  })();
+
+  $: methodLabel = state.selectedMethod ? METHOD_LABEL[state.selectedMethod] : 'Payment';
+  $: amountText = formatMoney(displayAmount, displayCurrency);
+  $: announce = {
+    loading: 'Preparing checkout',
+    list: 'Choose a payment method',
+    phone: 'Mobile money',
+    preparing: `Opening ${pspName}`,
+    bridge: `Opening ${pspName}`,
+    processing: 'Processing payment',
+    receipt: 'Payment received',
+    failure: 'Payment failed',
+  }[view];
 
   $: if (isOpen) {
     document.body.style.overflow = 'hidden';
@@ -298,48 +335,207 @@
     }
   }
 
-  function handleOpen(): void {
-    isOpen = true;
+  function resetFlow(): void {
+    pickToken += 1;
+    leaveBridge();
+    stage = 'list';
+    momoData = null;
     selectedProvider = null;
+    pspError = null;
+    confirmLeave = false;
   }
 
-  let hubtelCheckout: { cancel: () => void } | null = null;
+  function handleOpen(): void {
+    isOpen = true;
+    resetFlow();
+  }
 
   function handleClose(): void {
-    hubtelCheckout?.cancel();
-    hubtelCheckout = null;
     clearSuccessTimeout();
+    resetFlow();
     isOpen = false;
-    selectedProvider = null;
     store.close();
   }
 
-  async function handleProcessPayment(data: { phone?: string } | null): Promise<void> {
-    if (!state.paymentIntent) return;
+  /** Stop listening to the provider window that is open (if any). */
+  function leaveBridge(): void {
+    bridgeToken += 1;
+    hubtelOpen = false;
+    hubtelCheckout?.cancel();
+    hubtelCheckout = null;
+  }
 
-    const currentPsp = activeProvider;
+  /**
+   * Create (or reuse) a method-specific intent, then hand off to the provider.
+   *
+   * Paystack's resumeTransaction() can only reopen the transaction represented
+   * by its access code; it cannot change that transaction's payment channels.
+   * The first intent is created before the shopper picks a method so that the
+   * widget can show what is available. Create/reuse a method-specific intent
+   * before opening the provider, otherwise Paystack defaults that first intent
+   * to card even when the shopper picked Mobile Money.
+   */
+  async function proceed(method: PaymentMethod, provider: CheckoutProviderOption): Promise<void> {
+    if (picking) return;
+    picking = true;
+    const token = ++pickToken;
+
+    selectedProvider = provider.provider;
+    store.selectMethod(method);
+    stage = 'preparing';
 
     try {
-      switch (currentPsp) {
+      if (!initialPaymentIntent) {
+        const intent = await store.initialize(method, { allowedProviders: [provider.provider] });
+        if (token !== pickToken) return;
+        if (!intent) {
+          stage = 'list';
+          return;
+        }
+        // A fresh intent starts with no method; keep the shopper's pick.
+        store.selectMethod(method);
+      }
+      stage = 'bridge';
+      void openProvider(provider.provider.toLowerCase(), method);
+    } finally {
+      picking = false;
+    }
+  }
+
+  // A row was tapped: route to a provider and carry on.
+  function handlePick(method: PaymentMethod): void {
+    if (picking) return;
+    const provider = providerFor(method);
+    if (!provider) {
+      dispatch('error', {
+        code: 'UNSUPPORTED_CHECKOUT_SELECTION',
+        message: 'No connected provider supports this payment method.',
+        recoverable: true,
+      } as { code: string; message: string });
+      return;
+    }
+
+    if (method === 'mobile_money' && provider.provider.toLowerCase().includes('mpesa')) {
+      // M-Pesa is the one in-widget mobile money flow: ask for the number first.
+      selectedProvider = provider.provider;
+      store.selectMethod(method);
+      stage = 'phone';
+      return;
+    }
+
+    void proceed(method, provider);
+  }
+
+  // Mobile money number submitted (M-Pesa)
+  function handleMomoSubmit(data: MobileMoneyFormData): void {
+    const provider = providerFor('mobile_money');
+    if (!provider) return;
+    momoData = data;
+    void proceed('mobile_money', provider);
+  }
+
+  function handlePSPSuccess(pspResult: Record<string, unknown>): void {
+    void store.handlePspSuccess(pspResult);
+  }
+
+  // A provider window failed outright: report it and show the failure panel.
+  function handlePSPError(err: PaymentError): void {
+    pickToken += 1;
+    leaveBridge();
+    stage = 'list';
+    pspError = err;
+    dispatch('error', err);
+  }
+
+  // The provider window was dismissed: back to the list.
+  function handlePSPClose(): void {
+    pickToken += 1;
+    leaveBridge();
+    stage = 'list';
+  }
+
+  // Back chevron on a detail panel
+  function handlePanelBack(): void {
+    pickToken += 1;
+    leaveBridge();
+    stage = 'list';
+    selectedProvider = null;
+  }
+
+  // "Try again" on the failure panel
+  async function handleBack(): Promise<void> {
+    pickToken += 1;
+    leaveBridge();
+    pspError = null;
+    momoData = null;
+    stage = 'list';
+    selectedProvider = null;
+    if (store.getStatus() === 'failed') {
+      await store.reset();
+      // A checkout that never loaded has nothing to go back to; load it again.
+      if (!store.getPaymentIntent() && !initialPaymentIntent) {
+        await store.initialize();
+      }
+    }
+  }
+
+  function finishReceipt(): void {
+    if (state.result) deliverSuccess(state.result);
+  }
+
+  function requestClose(): void {
+    if (view === 'receipt') {
+      finishReceipt();
+      return;
+    }
+    if (inFlight) {
+      confirmLeave = true;
+      return;
+    }
+    handleClose();
+  }
+
+  /**
+   * Open the provider's own window. Card, bank and wallet details stay there.
+   * M-Pesa and Stripe render inside the dialog instead, so they open nothing here.
+   */
+  async function openProvider(provider: string, method: PaymentMethod): Promise<void> {
+    const intent = state.paymentIntent ?? store.getPaymentIntent();
+    if (!intent) return;
+    const token = bridgeToken;
+    const live = () => token === bridgeToken;
+    const phoneNumber = momoData?.phone || phone;
+    const bridgeMetadata = {
+      ...metadata,
+      org_id: intent.orgId ?? (metadata?.org_id as string),
+      payment_id: intent.id,
+      connection_id: intent.connectionId ?? (metadata?.connection_id as string),
+      customer_phone: phoneNumber,
+    };
+
+    try {
+      switch (provider) {
         case 'paystack': {
           await openPaystackPopup({
-            key: state.paymentIntent.pspPublicKey ?? publicKey ?? '',
+            key: intent.pspPublicKey ?? publicKey ?? '',
             email: email ?? '',
-            phone: data?.phone ?? phone,
+            phone: phoneNumber,
             amount: displayAmount,
             currency: displayCurrency,
-            ref: state.paymentIntent.id,
-            accessCode: state.paymentIntent.clientSecret,
-            channels: state.selectedMethod === 'mobile_money' ? ['mobile_money'] : ['card'],
-            metadata: {
-              ...metadata,
-              org_id: state.paymentIntent.orgId ?? (metadata?.org_id as string),
-              payment_id: state.paymentIntent.id,
-              connection_id: state.paymentIntent.connectionId ?? (metadata?.connection_id as string),
-              customer_phone: data?.phone ?? phone,
-            },
-            onSuccess: (res) => store.handlePspSuccess(res),
-            onClose: () => {},
+            ref: intent.id,
+            accessCode: intent.clientSecret,
+            channels: method === 'mobile_money' ? ['mobile_money'] : ['card'],
+            metadata: bridgeMetadata,
+            onSuccess: (res) => handlePSPSuccess(res),
+            onClose: () => live() && handlePSPClose(),
+            onError: (err) =>
+              live() &&
+              handlePSPError({
+                code: 'PSP_ERROR',
+                message: err?.message || 'Paystack checkout failed',
+                recoverable: true,
+                originalError: err,
+              }),
           });
           break;
         }
@@ -348,48 +544,50 @@
           // credentials are used in the browser.
           hubtelCheckout?.cancel();
           hubtelCheckout = await openHubtelPopup({
-            paymentId: state.paymentIntent.id,
-            clientSecret: state.paymentIntent.clientSecret,
+            paymentId: intent.id,
+            clientSecret: intent.clientSecret,
             publicKey,
             apiBaseUrl,
-            clientReference: state.paymentIntent.providerRefId || state.paymentIntent.reference || state.paymentIntent.id,
-            onSuccess: (res) => store.handlePspSuccess(res),
-            onError: (err) => store.handlePspError(err),
-            onClose: () => {},
+            clientReference: intent.providerRefId || intent.reference || intent.id,
+            onOpen: () => {
+              if (live()) hubtelOpen = true;
+            },
+            onSuccess: (res) => handlePSPSuccess(res),
+            onError: (err) => live() && handlePSPError(err as PaymentError),
+            onClose: () => live() && handlePSPClose(),
           });
+          if (!live()) {
+            hubtelCheckout?.cancel();
+            hubtelCheckout = null;
+          }
           break;
         }
         case 'flutterwave': {
           await openFlutterwaveModal({
-            public_key: state.paymentIntent.pspPublicKey ?? publicKey ?? '',
-            tx_ref: state.paymentIntent.id,
+            public_key: intent.pspPublicKey ?? publicKey ?? '',
+            tx_ref: intent.id,
             amount: toFlutterwaveAmount(displayAmount, displayCurrency),
             currency: displayCurrency,
             customer: {
               email: email ?? '',
-              phone_number: data?.phone ?? phone ?? '',
+              phone_number: phoneNumber ?? '',
             },
-            meta: {
-              ...metadata,
-              org_id: state.paymentIntent.orgId ?? (metadata?.org_id as string),
-              payment_id: state.paymentIntent.id,
-              connection_id: state.paymentIntent.connectionId ?? (metadata?.connection_id as string),
-              customer_phone: data?.phone ?? phone,
-            },
-            callback: (res) => store.handlePspSuccess(res),
-            onclose: () => {},
+            meta: bridgeMetadata,
+            callback: (res) => handlePSPSuccess(res),
+            onclose: () => live() && handlePSPClose(),
           });
           break;
         }
         case 'monnify': {
           const contractCode = metadata?.contract_code;
-          const apiKey = state.paymentIntent.pspPublicKey ?? publicKey ?? '';
-          const resolvedContractCode = (typeof contractCode === 'string' ? contractCode : publicKey ?? '');
+          const apiKey = intent.pspPublicKey ?? publicKey ?? '';
+          const resolvedContractCode = typeof contractCode === 'string' ? contractCode : publicKey ?? '';
 
           if (!apiKey || !resolvedContractCode) {
-            store.handlePspError({
+            handlePSPError({
               code: 'MONNIFY_CONFIG_MISSING',
               message: 'Monnify configuration is missing. Please check your API key and contract code.',
+              recoverable: true,
             });
             return;
           }
@@ -399,72 +597,28 @@
             contractCode: resolvedContractCode,
             amount: displayAmount,
             currency: displayCurrency,
-            reference: state.paymentIntent.reference ?? state.paymentIntent.id,
+            reference: intent.reference ?? intent.id,
             customerName: (metadata?.customer_name as string) ?? email ?? '',
             customerEmail: email ?? '',
-            customerPhone: data?.phone ?? phone ?? '',
+            customerPhone: phoneNumber ?? '',
             metadata: metadata as Record<string, string> | undefined,
-            onSuccess: (res) => store.handlePspSuccess(res),
-            onClose: () => {},
+            onSuccess: (res) => handlePSPSuccess(res),
+            onClose: () => live() && handlePSPClose(),
           });
           break;
         }
-        case 'mpesa': {
-          const baseUrl = apiBaseUrl ?? 'https://api.reevit.io';
-          const apiEndpointUrl = `${baseUrl}/v1/payments/${state.paymentIntent.id}/mpesa`;
-          await initiateMPesaSTKPush({
-            phoneNumber: data?.phone ?? phone ?? '',
-            amount: displayAmount,
-            reference: state.paymentIntent.reference ?? state.paymentIntent.id,
-            description: `Payment ${state.paymentIntent.reference ?? ''}`,
-            onInitiated: () => {},
-            onSuccess: (res) => store.handlePspSuccess(res),
-            onError: (err) => store.handlePspError({ code: 'MPESA_ERROR', message: err.message }),
-          }, apiEndpointUrl);
+        default:
+          // M-Pesa and Stripe render their own panels; anything else is shown as unsupported.
           break;
-        }
-        case 'stripe': {
-          // Stripe requires Elements - for now, show a message that it needs custom integration
-          store.handlePspError({
-            code: 'STRIPE_NOT_IMPLEMENTED',
-            message: 'Stripe integration requires custom Elements setup. Please use the React SDK or implement custom Stripe Elements.',
-          });
-          break;
-        }
-        default: {
-          store.handlePspError({
-            code: 'UNSUPPORTED_PSP',
-            message: `Payment provider "${currentPsp}" is not supported in this checkout.`,
-          });
-        }
       }
     } catch (err) {
-      store.handlePspError({
+      if (!live()) return;
+      handlePSPError({
         code: 'BRIDGE_ERROR',
         message: err instanceof Error ? err.message : 'Failed to open payment gateway',
+        recoverable: true,
+        originalError: err,
       });
-    }
-  }
-
-  async function handleProviderSelect(provider: string) {
-    // Toggle behavior - clicking same PSP collapses it
-    if (provider === selectedProvider) {
-      selectedProvider = null;
-      return;
-    }
-
-    const providerEntry = providerOptions.find((option) => option.provider === provider);
-    const methods = providerEntry?.methods?.length ? providerEntry.methods : configuredMethods;
-    const methodForInit =
-      state.selectedMethod && methods.includes(state.selectedMethod) ? state.selectedMethod : methods[0];
-
-    selectedProvider = provider as PSPType;
-
-    // Select the appropriate method for this provider
-    // No need to re-initialize - we already have the payment intent with available_psps
-    // Re-initializing would create a duplicate payment
-    if (methodForInit) {
-      store.selectMethod(methodForInit);
     }
   }
 
@@ -497,8 +651,7 @@
   });
 
   onDestroy(() => {
-    hubtelCheckout?.cancel();
-    hubtelCheckout = null;
+    leaveBridge();
     if (typeof document !== 'undefined') {
       document.body.style.overflow = '';
     }
@@ -507,14 +660,9 @@
 </script>
 
 <div class="reevit-sdk-container" style={Object.entries(themeVars).map(([k, v]) => `${k}:${v}`).join(';')}>
-  <slot {handleOpen} isLoading={storeIsLoading}>
-    <button
-      type="button"
-      class="reevit-pay-button"
-      on:click={handleOpen}
-      disabled={storeIsLoading}
-    >
-      {#if storeIsLoading}
+  <slot {handleOpen} isLoading={store.isLoading()}>
+    <button type="button" class="reevit-pay-button" on:click={handleOpen} disabled={store.isLoading()}>
+      {#if store.isLoading()}
         <span class="reevit-spinner"></span>
       {:else}
         <slot name="button-text">Pay Now</slot>
@@ -523,182 +671,108 @@
   </slot>
 
   {#if isOpen}
-    <div
-      class="reevit-brut-overlay"
-      role="button"
-      tabindex="0"
-      on:click={handleClose}
-      on:keydown={(e: KeyboardEvent) => e.key === 'Escape' && handleClose()}
+    <CheckoutShell
+      theme={dataTheme}
+      style={themeStyles || undefined}
+      brandName={brandName || 'Checkout'}
+      hasBrandName={!!brandName}
+      logoUrl={resolvedTheme?.logoUrl}
+      {amountText}
+      {orderRef}
+      {footerProvider}
+      viewKey={panelView}
+      {announce}
+      confirmOpen={confirmLeave}
+      onRequestClose={requestClose}
+      onStay={() => (confirmLeave = false)}
+      onLeave={handleClose}
     >
-      <div
-        class={cn('reevit-brut__modal', store.isComplete() && 'reevit-brut__modal--success')}
-        style={themeStyles}
-        data-reevit-theme={dataTheme}
-        role="dialog"
-        aria-modal="true"
-        on:click|stopPropagation
-        on:keydown|stopPropagation
-      >
-        <div class="reevit-brut__topbar">
-          <div class="reevit-brut__topbar-left">
-            <span class="reevit-brut__dot"></span>
-            <span>Reevit Checkout</span>
-          </div>
-          <button class="reevit-brut__close" on:click={handleClose} aria-label="Close">
-            [ESC]
-          </button>
-        </div>
-
-        <div class="reevit-brut__header">
-          <div class="reevit-brut__brand-line">
-            {#if resolvedTheme?.logoUrl}
-              <img src={resolvedTheme.logoUrl} alt="" class="reevit-brut__brand-logo" />
-            {:else if brandName}
-              <span class="reevit-brut__brand-fallback">{brandName.charAt(0)}</span>
-            {/if}
-            <span>MERCHANT: {(brandName || 'CHECKOUT').toUpperCase()}</span>
-          </div>
-          <div class="reevit-brut__amount-row">
-            <div class="reevit-brut__amount">
-              <span class="reevit-brut__amount-bracket">[</span>
-              {formatAmount(displayAmount, displayCurrency)}
-              <span class="reevit-brut__amount-bracket">]</span>
-            </div>
-            <span class="reevit-brut__amount-tag">DUE NOW</span>
-          </div>
-        </div>
-
-        {#if state.status === 'loading'}
-          <LoadingState
-            marker="PREPARING"
-            title="Setting up checkout"
-            message="This will only take a moment"
-          />
-        {:else if storeIsProcessing}
-          <LoadingState marker="PROCESSING" title="Confirming your payment" />
-        {:else if state.status === 'success' && state.result}
-          <div class="reevit-brut__state">
-            <span class="reevit-brut__state-marker">SUCCESS</span>
-            <div class="reevit-brut__check-block">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M5 12l5 5L20 7" />
-              </svg>
-            </div>
-            <h3 class="reevit-brut__state-title">PAYMENT CAPTURED</h3>
-            <p class="reevit-brut__state-sub">
-              {formatAmount(displayAmount, displayCurrency)}<br />
-              REF: {state.result.reference}
-            </p>
-            <div
-              class="reevit-brut__countdown"
-              style={`animation-duration: ${successDelayMs}ms`}
-            ></div>
-          </div>
-        {:else if state.status === 'failed' && state.error && !state.error.recoverable}
-          <div class="reevit-brut__state">
-            <span class="reevit-brut__state-marker">DECLINED</span>
-            <div class="reevit-brut__error-block">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
-                <path d="M18 6L6 18M6 6l12 12" />
-              </svg>
-            </div>
-            <h3 class="reevit-brut__state-title">PAYMENT FAILED</h3>
-            <p class="reevit-brut__state-sub">{state.error.message}</p>
-            <button class="reevit-brut__cta" style="max-width: 260px" on:click={() => store.initialize()}>
-              <span>RETRY</span><span>&#8635;</span>
-            </button>
-          </div>
-        {:else}
-          <div class="reevit-brut__body">
-            <div>
-              <div class="reevit-brut__section-label">PROCESSOR</div>
-              {#if providerOptions.length === 0}
-                <div class="reevit-brut__methods-empty">&gt; NO PROCESSORS AVAILABLE</div>
-              {:else}
-                <div class="reevit-brut__providers">
-                  {#each providerOptions as provider (provider.provider)}
-                    <button
-                      type="button"
-                      class="reevit-brut__provider"
-                      data-selected={activeProviderId === provider.provider}
-                      disabled={storeIsLoading}
-                      on:click={() => {
-                        if (provider.provider !== selectedProvider) {
-                          handleProviderSelect(provider.provider);
-                        }
-                      }}
-                    >
-                      {#if PROVIDER_LOGOS[provider.provider.toLowerCase()]}
-                        <img
-                          class="reevit-brut__provider-logo"
-                          src={PROVIDER_LOGOS[provider.provider.toLowerCase()]}
-                          alt=""
-                        />
-                      {:else}
-                        <span class="reevit-brut__provider-fallback">
-                          {provider.name.charAt(0).toUpperCase()}
-                        </span>
-                      {/if}
-                      <span class="reevit-brut__provider-name">{provider.name}</span>
-                    </button>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-
-            <div>
-              <div class="reevit-brut__section-label">SELECT_METHOD</div>
-              {#if !selectedProvider || availableMethods.length === 0}
-                <div class="reevit-brut__methods-empty">&gt; SELECT A PROCESSOR ABOVE</div>
-              {:else}
-                <div class="reevit-brut__methods">
-                  {#each availableMethods as method, index (method)}
-                    <button
-                      type="button"
-                      class={cn(
-                        'reevit-brut__method',
-                        availableMethods.length === 1 && 'reevit-brut__method--full'
-                      )}
-                      data-selected={state.selectedMethod === method}
-                      disabled={storeIsLoading}
-                      on:click={() => store.selectMethod(method)}
-                    >
-                      <span class="reevit-brut__method-id">
-                        {String(index + 1).padStart(2, '0')} / {METHOD_CODE[method]}
-                      </span>
-                      <span class="reevit-brut__method-name">{METHOD_NAME[method]}</span>
-                    </button>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-
-            {#if state.selectedMethod && needsMomoForm}
-              <MobileMoneyForm
-                initialPhone={phone}
-                loading={storeIsLoading}
-                hideCancel
-                on:submit={(e) => handleProcessPayment(e.detail)}
-                on:cancel={handleClose}
+      {#key panelView}
+        <div class="reevit-panel reevit-panel--{direction}" data-reevit="panel" data-step={panelView}>
+          {#if view === 'loading'}
+            <LoadingState title="Preparing checkout" />
+          {:else if view === 'processing'}
+            <LoadingState title="Processing payment" message="Please don’t close this window." />
+          {:else if view === 'receipt' && state.result}
+            <ReceiptPanel
+              reference={state.result.reference || state.result.paymentId}
+              method={METHOD_LABEL[state.result.paymentMethod] || methodLabel}
+              provider={providerOptions.find((p) => p.provider.toLowerCase() === (selectedProvider || state.result?.psp || '').toLowerCase())?.name ||
+                titleCase(selectedProvider || state.result.psp || pspName)}
+              merchantName={brandName || 'Checkout'}
+              {orderRef}
+              {amountText}
+              onDone={finishReceipt}
+            />
+          {:else if view === 'failure'}
+            <FailurePanel
+              title={state.paymentIntent ? 'Payment failed' : 'Couldn’t start checkout'}
+              message={pspError?.message || state.error?.message || 'Something went wrong. Please try again.'}
+              onRetry={handleBack}
+            />
+          {:else if view === 'phone'}
+            <PanelHead title="Mobile money" onBack={directPhone ? undefined : handlePanelBack} />
+            <MobileMoneyForm
+              mode="mpesa"
+              initialPhone={momoData?.phone || phone}
+              submitLabel={`Pay ${amountText}`}
+              hideCancel
+              on:submit={(e) => handleMomoSubmit(e.detail)}
+            />
+          {:else if view === 'preparing'}
+            {#if pspLower !== 'mpesa'}<PanelHead title={methodLabel} onBack={handlePanelBack} />{/if}
+            <LoadingState variant="line" title={`Opening ${pspName}…`} />
+          {:else if view === 'bridge'}
+            <!-- M-Pesa's own waiting/failed panels carry the heading and the way back. -->
+            {#if pspLower !== 'mpesa'}<PanelHead title={methodLabel} onBack={handlePSPClose} />{/if}
+            {#if pspLower === 'mpesa'}
+              <MPesaPanel
+                apiEndpoint={`${apiBaseUrl ?? 'https://api.reevit.io'}/v1/payments/${state.paymentIntent?.id}/mpesa`}
+                phoneNumber={momoData?.phone || phone || ''}
+                amount={displayAmount}
+                currency={displayCurrency}
+                headers={{ 'x-reevit-public-key': publicKey || '' }}
+                reference={state.paymentIntent?.reference ?? state.paymentIntent?.id ?? ''}
+                description={`Payment ${state.paymentIntent?.reference ?? ''}`}
+                onSuccess={(res) => handlePSPSuccess(res)}
+                onError={(err) => dispatch('error', err)}
+                onChangeNumber={() => (stage = 'phone')}
               />
+            {:else if pspLower === 'stripe'}
+              <StripePanel
+                publishableKey={state.paymentIntent?.pspPublicKey ?? publicKey ?? ''}
+                clientSecret={state.paymentIntent?.clientSecret || ''}
+                amount={displayAmount}
+                currency={displayCurrency}
+                dark={dataTheme === 'dark'}
+                onSuccess={(res) => handlePSPSuccess(res)}
+                onError={(err) => {
+                  // Card typos are shown inline by the panel; only a failed load replaces the form.
+                  if (err.code === 'STRIPE_INIT_ERROR' || err.code === 'NOT_INITIALIZED') {
+                    handlePSPError({ ...err, recoverable: true });
+                  } else {
+                    dispatch('error', err);
+                  }
+                }}
+              />
+            {:else if pspLower === 'hubtel'}
+              <LoadingState variant="line" title={hubtelOpen ? 'Complete your payment with Hubtel' : 'Opening Hubtel…'} />
+            {:else if pspLower === 'paystack' || pspLower === 'flutterwave' || pspLower === 'monnify'}
+              <LoadingState variant="line" title={`Opening ${pspName}…`} />
             {:else}
-              <button
-                type="button"
-                class="reevit-brut__cta"
-                on:click={handleContinue}
-                disabled={!selectedProvider || !state.selectedMethod || storeIsLoading}
-              >
-                <span>MAKE PAYMENT</span>
-                <span>&rarr;</span>
-              </button>
+              <div class="reevit-result" data-reevit="failure">
+                <h2 class="reevit-panel-title" tabindex="-1" data-reevit="panel-title">
+                  <span class="reevit-fail-dot" aria-hidden="true"></span>Provider not supported
+                </h2>
+                <p class="reevit-text">{psp} is not supported.</p>
+                <button type="button" class="reevit-cta" data-reevit="cta" data-first="" on:click={handlePanelBack}>Go back</button>
+              </div>
             {/if}
-          </div>
-
-          <div class="reevit-brut__footer">
-            <span>Secured by Reevit</span>
-          </div>
-        {/if}
-      </div>
-    </div>
+          {:else}
+            <MethodList methods={methodList} {country} onPick={handlePick} />
+          {/if}
+        </div>
+      {/key}
+    </CheckoutShell>
   {/if}
 </div>
