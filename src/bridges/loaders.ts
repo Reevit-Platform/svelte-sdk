@@ -54,26 +54,39 @@ interface PaystackTransactionConfig extends PaystackPopupCallbacks {
   channels?: string[];
 }
 
-interface StripeInstance {
-  elements: () => StripeElements;
+export interface StripeInstance {
+  elements: (options?: { clientSecret: string; appearance?: StripeAppearance }) => StripeElements;
   confirmCardPayment: (
     clientSecret: string,
     data?: { payment_method?: string | { card: StripeCardElement } }
   ) => Promise<{ error?: { message: string }; paymentIntent?: { id: string; status: string } }>;
   confirmPayment: (options: {
     elements: StripeElements;
-    clientSecret: string;
+    clientSecret?: string;
     confirmParams?: { return_url?: string };
     redirect?: 'if_required';
-  }) => Promise<{ error?: { message: string }; paymentIntent?: { id: string; status: string } }>;
+  }) => Promise<{ error?: StripeError; paymentIntent?: { id: string; status: string } }>;
 }
 
-interface StripeElements {
+export interface StripeError {
+  type?: string;
+  message: string;
+  code?: string;
+}
+
+export interface StripeAppearance {
+  theme?: 'stripe' | 'night' | 'flat';
+  variables?: Record<string, string>;
+  rules?: Record<string, Record<string, string>>;
+}
+
+export interface StripeElements {
   create: (type: string, options?: Record<string, unknown>) => StripeCardElement;
   getElement: (type: string) => StripeCardElement | null;
+  submit?: () => Promise<{ error?: StripeError }>;
 }
 
-interface StripeCardElement {
+export interface StripeCardElement {
   mount: (selector: string | HTMLElement) => void;
   unmount: () => void;
   on: (event: string, handler: (e: any) => void) => void;
@@ -184,6 +197,8 @@ export interface HubtelConfig {
   onSuccess: (response: Record<string, unknown>) => void;
   onClose: () => void;
   onError?: (error: HubtelCheckoutError) => void;
+  /** Called once Hubtel's hosted checkout is on screen. */
+  onOpen?: () => void;
   /** @deprecated Ignored. Hubtel's hosted checkout already knows the merchant. */
   clientId?: string;
   /** @deprecated Ignored. Set when the payment is created. */
@@ -264,7 +279,11 @@ export interface MonnifyConfig {
 export interface MPesaConfig {
   phoneNumber: string;
   amount: number;
+  /** Sent with the push when given (KES or TZS). */
+  currency?: string;
   reference: string;
+  /** Extra request headers, e.g. `x-reevit-public-key`. */
+  headers?: Record<string, string>;
   description?: string;
   onInitiated: () => void;
   onSuccess: (response: { transactionId: string;[key: string]: unknown }) => void;
@@ -354,6 +373,7 @@ export async function openHubtelPopup(config: HubtelConfig): Promise<HubtelCheck
           status,
           psp: 'hubtel',
         }),
+      onOpen: () => config.onOpen?.(),
       onError: (error) => (config.onError ? config.onError(error) : config.onClose()),
       onClose: () => config.onClose(),
     });
@@ -500,10 +520,11 @@ export async function initiateMPesaSTKPush(
   try {
     const response = await fetch(apiEndpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...config.headers },
       body: JSON.stringify({
         phone_number: config.phoneNumber,
         amount: config.amount,
+        ...(config.currency ? { currency: config.currency } : {}),
         reference: config.reference,
         description: config.description,
       }),

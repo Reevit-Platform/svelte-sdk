@@ -1,0 +1,99 @@
+/**
+ * Parity harness stubs: mock intents and NO network calls (providers, Stripe.js and
+ * fetch are stubbed here only). Imported before the widget so the SDK finds them.
+ */
+export const params = new URLSearchParams(location.search);
+export const state = params.get('state') || 'list';
+export const theme = params.get('theme') === 'dark' ? 'dark' : 'light';
+
+export const PROVIDERS = {
+  paystack: { name: 'Paystack', methods: ['card', 'mobile_money', 'bank_transfer'], currency: 'GHS' },
+  hubtel: { name: 'Hubtel', methods: ['card', 'mobile_money'], currency: 'GHS' },
+  flutterwave: { name: 'Flutterwave', methods: ['card', 'mobile_money', 'bank_transfer'], currency: 'GHS' },
+  monnify: { name: 'Monnify', methods: ['card', 'bank_transfer'], currency: 'NGN' },
+  mpesa: { name: 'M-Pesa', methods: ['mobile_money'], currency: 'KES' },
+  stripe: { name: 'Stripe', methods: ['card'], currency: 'USD' },
+} as const;
+
+export type ProviderId = keyof typeof PROVIDERS;
+export const provider = (params.get('provider') ||
+  (state.startsWith('mpesa') ? 'mpesa' : state === 'stripe' ? 'stripe' : 'paystack')) as ProviderId;
+
+const cfg = PROVIDERS[provider];
+export const currency = params.get('currency') || (provider === 'monnify' ? 'NGN' : cfg.currency === 'USD' ? 'GHS' : cfg.currency);
+export const amount = 75500; // GHS 755.00 in minor units
+
+export const intent = {
+  id: 'pay_preview_1',
+  clientSecret: 'cs_preview_1',
+  pspPublicKey: 'pk_preview',
+  amount,
+  currency,
+  status: 'pending' as const,
+  recommendedPsp: provider,
+  availableMethods: ['card', 'mobile_money', 'bank_transfer'] as ('card' | 'mobile_money' | 'bank_transfer')[],
+  availableProviders: [{ provider, name: cfg.name, methods: [...cfg.methods] as ('card' | 'mobile_money' | 'bank_transfer')[] }],
+};
+
+const never = new Promise<Response>(() => {});
+const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status }));
+window.fetch = ((input: RequestInfo | URL) => {
+  const url = String(input);
+  if (url.includes('/confirm-intent')) {
+    if (state === 'processing') return never;
+    if (state === 'failure') return json({ message: 'Your card was declined. Try another card.' }, 402);
+    return json({ id: 'pay_preview_1', status: 'succeeded', provider_ref_id: 'pay_wrvrzjvp' });
+  }
+  if (url.endsWith('/mpesa')) {
+    if (state === 'mpesa-failed') return json({ message: 'The request could not be sent. Try again.' }, 500);
+    return json({ checkout_request_id: 'ws_CO_2310202611570001' });
+  }
+  if (state === 'loading') return never;
+  return json({});
+}) as typeof fetch;
+
+// The SDK's script loader skips the network when a script with its id is already in the page.
+for (const id of ['paystack-script', 'stripe-script']) {
+  const el = document.createElement('script');
+  el.id = id;
+  document.head.append(el);
+}
+
+const pending = state === 'opening' || state === 'confirm';
+(window as any).PaystackPop = class {
+  newTransaction() {}
+  resumeTransaction(_code: string, cb: { onSuccess?: (r: unknown) => void }) {
+    if (pending) return; // provider window stays open
+    queueMicrotask(() => cb.onSuccess?.({ reference: 'pay_wrvrzjvp', trans: '1', status: 'success', message: 'ok', transaction: 'txn_1', trxref: 'pay_wrvrzjvp' }));
+  }
+};
+
+// Stripe: a stand-in for the Payment Element that follows the appearance object the SDK passes in.
+type Appearance = { variables?: Record<string, string>; rules?: Record<string, Record<string, string>> };
+(window as any).Stripe = () => ({
+  elements: ({ appearance }: { appearance?: Appearance }) => ({
+    create: () => {
+      let host: HTMLElement | null = null;
+      const v = appearance?.variables ?? {};
+      const input = appearance?.rules?.['.Input'] ?? {};
+      const label = appearance?.rules?.['.Label'] ?? {};
+      const field = (name: string, placeholder: string) =>
+        `<div style="margin-bottom:${v.spacingGridRow}"><div style="font-size:${label.fontSize};font-weight:${label.fontWeight};margin-bottom:${label.marginBottom};color:${label.color}">${name}</div>` +
+        `<div style="height:${input.height};padding:0 14px;display:flex;align-items:center;border:${input.border};border-radius:${v.borderRadius};background:${input.backgroundColor};font-size:${input.fontSize};color:${v.colorTextPlaceholder}">${placeholder}</div></div>`;
+      return {
+        mount(el: HTMLElement) {
+          host = el;
+          el.style.fontFamily = v.fontFamily ?? '';
+          el.innerHTML = field('Card number', '1234 1234 1234 1234') +
+            `<div style="display:grid;grid-template-columns:1fr 1fr;gap:${v.spacingGridColumn}">${field('Expiration date', 'MM / YY')}${field('Security code', 'CVC')}</div>`;
+        },
+        unmount() {},
+        destroy() { if (host) host.innerHTML = ''; },
+        on(event: string, handler: () => void) { if (event === 'ready') setTimeout(handler, 0); },
+      };
+    },
+    submit: async () => ({}),
+    getElement: () => null,
+  }),
+  confirmPayment: async () => ({ paymentIntent: { id: 'pi_preview', status: 'succeeded' } }),
+});
