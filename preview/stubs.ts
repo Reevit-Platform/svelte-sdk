@@ -7,6 +7,8 @@ export const state = params.get('state') || 'list';
 export const theme = params.get('theme') === 'dark' ? 'dark' : 'light';
 /** Reevit's own mobile money screens, driven through a stubbed session + direct charge API. */
 export const direct = state.startsWith('momo');
+/** Reevit's own bank transfer screens, same session, frozen clock. */
+export const bankState = state.startsWith('bank');
 
 export const PROVIDERS = {
   paystack: { name: 'Paystack', methods: ['card', 'mobile_money', 'bank_transfer'], currency: 'GHS' },
@@ -57,12 +59,13 @@ const intentResponse = {
     {
       provider,
       name: cfg.name,
-      methods: provider === 'mpesa' ? ['mobile_money'] : ['card', 'mobile_money'],
+      methods: provider === 'mpesa' ? ['mobile_money'] : ['card', 'mobile_money', 'bank_transfer'],
       method_options: [
         provider === 'mpesa'
           ? { method: 'mobile_money', flow: 'direct', networks: ['mpesa'], needs: ['phone'] }
           : { method: 'mobile_money', flow: 'direct', networks: ['mtn', 'telecel', 'airteltigo'], needs: ['phone', 'network'], voucher_networks: ['telecel'] },
         { method: 'card', flow: 'hosted', networks: [], needs: [] },
+        { method: 'bank_transfer', flow: 'direct', networks: [], needs: [] },
       ],
     },
   ],
@@ -70,7 +73,7 @@ const intentResponse = {
 
 // A frozen clock makes the countdown, the bar and the Resend cooldown the same in every shot.
 let clock = Date.parse('2026-10-23T12:00:00Z');
-if (direct) Date.now = () => clock;
+if (direct || bankState) Date.now = () => clock;
 const at = (offsetMs: number) => new Date(clock + offsetMs).toISOString();
 const kesPreview = currency === 'KES';
 
@@ -116,8 +119,45 @@ function directCharge() {
   }
 }
 
+/** What a provider returns for a one-off account; the name is absent for Flutterwave Ghana. */
+const secondsLeft = Number(params.get('expires') || 17);
+function bankView(over: Record<string, unknown> = {}, expiresInMs = secondsLeft * 1000) {
+  const account = {
+    bank: 'Wema Bank',
+    account_number: '7820194552',
+    ...(state === 'bank-no-name' ? {} : { account_name: 'Reevit / Kente & Co.' }),
+    amount,
+    expires_at: at(expiresInMs),
+  };
+  return {
+    id: 'pay_preview_bank',
+    status: 'requires_action',
+    amount,
+    currency,
+    method: 'bank_transfer',
+    provider_display: cfg.name,
+    client_secret: 'pfsec_preview_bank',
+    next_action: { type: 'bank_transfer', expires_at: account.expires_at, bank: account, attempt: { n: 1, max: 3 } },
+    rerouted: false,
+    poll_after_ms: 5000,
+    ...over,
+  };
+}
+
 window.fetch = ((input: RequestInfo | URL) => {
   const url = String(input);
+  if (bankState) {
+    if (url.includes('/v1/checkout/sessions/') && url.endsWith('/charge')) return json(bankView({}, state === 'bank-expired' ? -1000 : undefined));
+    if (url.includes('/v1/checkout/sessions/')) return json({ id: 'sess', client_secret: 'x', session_secret: 'cs_preview', payment_intent: intentResponse });
+    if (url.includes('/status')) {
+      if (state === 'bank-expired') {
+        return json(bankView({ status: 'expired', next_action: undefined, client_secret: undefined, poll_after_ms: 0, failure: { code: 'expired', category: 'timeout', retryable: true, message: 'x' } }));
+      }
+      // "Confirming your transfer" stays on screen while the check never answers.
+      if (state === 'bank-confirming' && url.includes('check=1')) return never;
+      return json(bankView({ client_secret: undefined }));
+    }
+  }
   if (direct) {
     if (url.includes('/v1/checkout/sessions/') && url.endsWith('/charge')) {
       // One second and three quarters into the window: "0:11" with the bar where the prototype shot has it.

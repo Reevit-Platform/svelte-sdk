@@ -3,7 +3,7 @@
   import { ReevitCheckout } from '../src';
   import logoBlack from './img/logo-short-black.png';
   import logoWhite from './img/logo-short-white.png';
-  import { amount, currency, direct, intent, params, provider, state as shot, theme } from './stubs';
+  import { amount, bankState, currency, direct, intent, params, provider, state as shot, theme } from './stubs';
 
   const needsClick = params.get('pointer') === '1';
   let open = $state(!needsClick);
@@ -34,6 +34,15 @@
       if (shot === 'mpesa-waiting' || shot === 'mpesa-failed') {
         await wait(60);
         click('[data-reevit="momo-form"] [data-reevit="cta"]');
+      }
+      if (bankState) {
+        click('[data-reevit="row"][data-method="bank_transfer"]');
+        await wait(300);
+        if (shot === 'bank-confirming' || shot === 'bank-not-seen') {
+          click('[data-reevit="bank"] [data-reevit="cta"]');
+          await wait(shot === 'bank-not-seen' ? 1300 : 300);
+        }
+        if (shot === 'bank-expired') await wait(1500);
       }
       if (direct) {
         // M-Pesa is the only method, so there is no list to pick from.
@@ -83,8 +92,8 @@
       email="ama.owusu@example.com"
       phone={provider === 'mpesa' ? '0712345678' : '0244128890'}
       paymentMethods={['card', 'mobile_money', 'bank_transfer']}
-      sessionSecret={direct ? 'cs_preview' : undefined}
-      initialPaymentIntent={shot === 'loading' || direct ? undefined : intent}
+      sessionSecret={direct || bankState ? 'cs_preview' : undefined}
+      initialPaymentIntent={shot === 'loading' || direct || bankState ? undefined : intent}
       successDelayMs={600000}
       theme={theming}
     />

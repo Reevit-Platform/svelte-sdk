@@ -26,7 +26,8 @@
     type DirectCharge,
     type DirectInput,
   } from '../direct/directCharge';
-  import { createDirectChargeClient, type PublicAttempt } from '../direct/api';
+  import { createDirectBank, type DirectBank } from '../direct/directBank';
+  import { createDirectChargeClient, type BankDetails, type PublicAttempt } from '../direct/api';
   import { NETWORK_LABEL, formatPayerPhone } from '../direct/format';
   import MobileMoneyForm from './MobileMoneyForm.svelte';
   import LoadingState from './LoadingState.svelte';
@@ -40,6 +41,9 @@
   import MomoWaitPanel from './MomoWaitPanel.svelte';
   import MomoCodePanel from './MomoCodePanel.svelte';
   import MomoFailurePanel from './MomoFailurePanel.svelte';
+  import BankDetailsPanel from './BankDetailsPanel.svelte';
+  import BankNotSeenPanel from './BankNotSeenPanel.svelte';
+  import BankFailurePanel from './BankFailurePanel.svelte';
   import StripePanel from './StripePanel.svelte';
   import {
     openPaystackPopup,
@@ -67,10 +71,11 @@
 
   const dispatch = createEventDispatcher<ReevitCheckoutEvents>();
 
-  type Stage = 'list' | 'phone' | 'direct' | 'preparing' | 'bridge';
+  type Stage = 'list' | 'phone' | 'direct' | 'bank' | 'preparing' | 'bridge';
   type ViewId =
     | 'loading' | 'list' | 'phone' | 'preparing' | 'bridge' | 'processing' | 'confirming' | 'unconfirmed' | 'receipt' | 'failure'
-    | 'momo' | 'momo-wait' | 'momo-code' | 'momo-fail';
+    | 'momo' | 'momo-wait' | 'momo-code' | 'momo-fail'
+    | 'bank-start' | 'bank' | 'bank-conf' | 'bank-miss' | 'bank-fail';
 
   /** A provider that takes a method in Reevit's own screens, with its capabilities. */
   interface DirectSelection {
@@ -256,26 +261,34 @@
    * the checkout came from a server-created session (the charge route is keyed by the
    * session secret). Anything else keeps the provider's own window.
    */
-  $: directSelection = ((): DirectSelection | undefined => {
-    if (!sessionSecret) return undefined;
-    const recommended = state.paymentIntent?.recommendedPsp?.toLowerCase();
-    const candidates = providerOptions
+  function pickDirect(
+    method: PaymentMethod,
+    secret: string | undefined,
+    providers: CheckoutProvider[],
+    recommendedPsp: string | undefined,
+  ): DirectSelection | undefined {
+    if (!secret || (method !== 'mobile_money' && method !== 'bank_transfer')) return undefined;
+    const recommended = recommendedPsp?.toLowerCase();
+    const candidates = providers
       .map((provider) => ({
         provider,
-        option: provider.methodOptions?.find((o) => o.method === 'mobile_money' && o.flow === 'direct'),
+        option: provider.methodOptions?.find((o) => o.method === method && o.flow === 'direct'),
       }))
       .filter((c): c is DirectSelection => !!c.option);
     return candidates.find((c) => c.provider.provider.toLowerCase() === recommended) ?? candidates[0];
-  })();
+  }
+  $: directSelection = pickDirect('mobile_money', sessionSecret, providerOptions, state.paymentIntent?.recommendedPsp);
+  $: bankSelection = pickDirect('bank_transfer', sessionSecret, providerOptions, state.paymentIntent?.recommendedPsp);
   const directFor = (method: PaymentMethod): DirectSelection | undefined =>
-    method === 'mobile_money' ? directSelection : undefined;
+    method === 'mobile_money' ? directSelection : method === 'bank_transfer' ? bankSelection : undefined;
 
   // The only method is mobile money: skip the list and ask for the number.
   $: soleMethod = methodList.length === 1 ? methodList[0] : null;
   $: soleProvider = soleMethod ? providerFor(soleMethod) : undefined;
   $: soleDirect = soleMethod === 'mobile_money' && !!directSelection;
+  $: soleBank = soleMethod === 'bank_transfer' && !!bankSelection;
   $: directPhone = !soleDirect && soleMethod === 'mobile_money' && !!soleProvider?.provider.toLowerCase().includes('mpesa');
-  $: activeStage = (stage === 'list' && soleDirect ? 'direct' : stage === 'list' && directPhone ? 'phone' : stage) as Stage;
+  $: activeStage = (stage === 'list' && soleDirect ? 'direct' : stage === 'list' && soleBank ? 'bank' : stage === 'list' && directPhone ? 'phone' : stage) as Stage;
 
   const directApi = createDirectChargeClient({ baseUrl: apiBaseUrl });
   /** "MTN MoMo · 024 412 8890", kept for the receipt only; the number is not handed to the merchant. */
@@ -313,8 +326,48 @@
   };
   $: chargeStore.setOptions({ sessionSecret, provider: directSelection?.provider.provider ?? '' });
   $: charge = { ...$chargeStore, ...chargeActions } as DirectCharge;
+
+  /** "Bank transfer · Wema Bank", kept for the receipt only. */
+  let receiptBank: string | null = null;
+  const bankStore = createDirectBank({
+    api: directApi,
+    sessionSecret,
+    provider: '',
+    onSuccess: (attempt: PublicAttempt, details: BankDetails | null) => {
+      receiptBank = details?.bank ? `Bank transfer · ${details.bank}` : null;
+      store.completePayment({
+        paymentId: attempt.id,
+        reference: reference || '',
+        amount: attempt.amount,
+        currency: attempt.currency,
+        paymentMethod: 'bank_transfer',
+        psp: bankSelection?.provider.provider ?? attempt.provider_display ?? '',
+        pspReference: attempt.id,
+        status: 'success',
+        metadata: { backend_status: attempt.status, rerouted: attempt.rerouted, receipt_url: attempt.receipt_url },
+      } as PaymentResult);
+    },
+    onFailure: (failure) =>
+      dispatch('error', { code: failure.code, message: failure.message, recoverable: failure.retryable } as { code: string; message: string }),
+  });
+  const bankActions = {
+    start: bankStore.start,
+    sent: bankStore.sent,
+    keepWaiting: bankStore.keepWaiting,
+    newDetails: bankStore.newDetails,
+    reset: bankStore.reset,
+  };
+  $: bankStore.setOptions({ sessionSecret, provider: bankSelection?.provider.provider ?? '' });
+  $: bank = { ...$bankStore, ...bankActions } as DirectBank;
+  const resetCharge = (): void => {
+    chargeStore.reset();
+    bankStore.reset();
+  };
   // Closing from outside (a controlled `isOpen`) must also stop any prompt being followed.
-  $: if (!isOpen) chargeStore.reset();
+  $: if (!isOpen) resetCharge();
+
+  // Bank transfer asks for nothing from the shopper: the account is requested as soon as the screen opens.
+  $: if (isOpen && activeStage === 'bank' && bank.phase === 'idle' && state.paymentIntent && !!bankSelection) void bankStore.start();
 
   // Theme
   $: brandName = resolvedTheme?.companyName;
@@ -358,6 +411,17 @@
     if (state.confirmation === 'confirming') return 'confirming';
     if (state.status === 'processing') return 'processing';
     if (!state.paymentIntent) return 'loading';
+    if (activeStage === 'bank') {
+      return bank.phase === 'confirming'
+        ? 'bank-conf'
+        : bank.phase === 'notSeen'
+          ? 'bank-miss'
+          : bank.phase === 'failed' && bank.failure
+            ? 'bank-fail'
+            : (bank.phase === 'details' || bank.phase === 'expired') && bank.details
+              ? 'bank'
+              : 'bank-start';
+    }
     if (activeStage === 'direct') {
       return charge.phase === 'waiting'
         ? 'momo-wait'
@@ -385,10 +449,12 @@
     }
     if (lastPanelView !== next) {
       const from = lastPanelView;
-      const isDetail = (v: ViewId) => v === 'phone' || v === 'preparing' || v === 'bridge' || v === 'momo';
-      const isPrompt = (v: ViewId) => v === 'momo-wait' || v === 'momo-code' || v === 'momo-fail';
+      const isDetail = (v: ViewId) =>
+        v === 'phone' || v === 'preparing' || v === 'bridge' || v === 'momo' || v === 'bank-start' || v === 'bank';
+      const isPrompt = (v: ViewId) =>
+        v === 'momo-wait' || v === 'momo-code' || v === 'momo-fail' || v === 'bank-conf' || v === 'bank-miss' || v === 'bank-fail';
       panelDirection =
-        (next === 'list' && (isDetail(from) || isPrompt(from))) || (next === 'momo' && isPrompt(from))
+        (next === 'list' && (isDetail(from) || isPrompt(from))) || ((next === 'momo' || next === 'bank') && isPrompt(from))
           ? 'back'
           : isDetail(next) && from === 'list'
             ? 'forward'
@@ -401,7 +467,9 @@
   $: direction = directionFor(panelView);
 
   // A payment is in flight while a provider window is open or the result is being confirmed.
-  $: inFlight = view === 'bridge' || view === 'processing' || view === 'momo-wait' || view === 'momo-code';
+  $: inFlight =
+    view === 'bridge' || view === 'processing' || view === 'momo-wait' || view === 'momo-code' ||
+    (view === 'bank' && bank.phase !== 'expired') || view === 'bank-conf' || view === 'bank-miss';
   // The confirmation only makes sense while a payment is still in flight.
   $: if (confirmLeave && !inFlight) confirmLeave = false;
 
@@ -428,6 +496,11 @@
     'momo-wait': 'Waiting for your approval',
     'momo-code': 'Enter your code',
     'momo-fail': charge.failure?.title ?? 'Payment failed',
+    'bank-start': 'Getting account details',
+    bank: bank.phase === 'expired' ? 'Account details expired' : 'Bank transfer',
+    'bank-conf': 'Confirming your transfer',
+    'bank-miss': 'We haven’t seen it yet',
+    'bank-fail': bank.failure?.title ?? 'Payment failed',
     preparing: `Opening ${pspName}`,
     bridge: `Opening ${pspName}`,
     processing: 'Processing payment',
@@ -456,7 +529,7 @@
     selectedProvider = null;
     pspError = null;
     confirmLeave = false;
-    chargeStore.reset();
+    resetCharge();
   }
 
   function handleOpen(): void {
@@ -538,6 +611,13 @@
     }
 
     const direct = directFor(method);
+    if (direct && method === 'bank_transfer') {
+      // Reevit's own screens: the account appears at once. A live account is shown again, never replaced.
+      selectedProvider = direct.provider.provider;
+      store.selectMethod(method);
+      stage = 'bank';
+      return;
+    }
     if (direct) {
       // Reevit's own screens: the number first, then the prompt. An earlier prompt keeps being watched.
       selectedProvider = direct.provider.provider;
@@ -803,6 +883,7 @@
   onDestroy(() => {
     store.dispose();
     chargeStore.destroy();
+    bankStore.destroy();
     leaveBridge();
     if (typeof document !== 'undefined') {
       document.body.style.overflow = '';
@@ -852,7 +933,7 @@
           {:else if view === 'receipt' && state.result}
             <ReceiptPanel
               reference={state.result.reference || state.result.paymentId}
-              method={(state.result.paymentMethod === 'mobile_money' && receiptMethod) || METHOD_LABEL[state.result.paymentMethod] || methodLabel}
+              method={(state.result.paymentMethod === 'mobile_money' && receiptMethod) || (state.result.paymentMethod === 'bank_transfer' && receiptBank) || METHOD_LABEL[state.result.paymentMethod] || methodLabel}
               provider={providerOptions.find((p) => p.provider.toLowerCase() === (selectedProvider || state.result?.psp || '').toLowerCase())?.name ||
                 titleCase(selectedProvider || state.result.psp || pspName)}
               merchantName={brandName || 'Checkout'}
@@ -905,6 +986,33 @@
               <MomoFailurePanel
                 {charge}
                 failure={charge.failure}
+                canChooseAnother={methodList.length > 1}
+                onChooseAnother={handlePanelBack}
+                onClose={handleClose}
+              />
+            {/if}
+          {:else if view === 'bank-start'}
+            <PanelHead title="Bank transfer" onBack={soleBank ? undefined : handlePanelBack} />
+            <LoadingState variant="line" title="Getting account details…" />
+          {:else if view === 'bank'}
+            {#if bank.details}
+              <BankDetailsPanel
+                {bank}
+                details={bank.details}
+                currency={displayCurrency}
+                amountText={formatMoney(bank.details.amount || displayAmount, displayCurrency)}
+                onBack={soleBank ? undefined : handlePanelBack}
+              />
+            {/if}
+          {:else if view === 'bank-conf'}
+            <LoadingState title="Confirming your transfer" message="This usually takes a moment." />
+          {:else if view === 'bank-miss'}
+            <BankNotSeenPanel {bank} />
+          {:else if view === 'bank-fail'}
+            {#if bank.failure}
+              <BankFailurePanel
+                {bank}
+                failure={bank.failure}
                 canChooseAnother={methodList.length > 1}
                 onChooseAnother={handlePanelBack}
                 onClose={handleClose}
