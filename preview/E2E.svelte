@@ -12,7 +12,7 @@
   sessionSecret={params.get('session') || ''}
   apiBaseUrl={params.get('api') || 'http://localhost:8080'}
   reference="ORD-24817"
-  paymentMethods={['card', 'mobile_money']}
+  paymentMethods={['card', 'mobile_money', 'bank_transfer']}
   successDelayMs={600000}
   theme={{ companyName: 'Kente & Co.' }}
   on:success={(e) => events.push(`success:${e.detail.paymentId}`)}
