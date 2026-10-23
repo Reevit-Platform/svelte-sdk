@@ -105,6 +105,14 @@
   /** Bumped whenever a provider window is left, so its late callbacks are ignored. */
   let bridgeToken = 0;
   let hubtelCheckout: { cancel: () => void } | null = null;
+  /**
+   * M-Pesa prompts sent in this checkout. The first is attempt 0; every later one
+   * (a retry, or a corrected number) is a fresh intent, so it sends a fresh prompt
+   * instead of replaying the failed one. The backend allows attempts 0 to 3.
+   */
+  let promptsSent = 0;
+  /** The backend refuses a checkout-session selection past attempt 3. */
+  const MAX_PROMPT_ATTEMPT = 3;
 
   const pspNames: Record<string, string> = {
     hubtel: 'Hubtel',
@@ -375,7 +383,11 @@
    * before opening the provider, otherwise Paystack defaults that first intent
    * to card even when the shopper picked Mobile Money.
    */
-  async function proceed(method: PaymentMethod, provider: CheckoutProviderOption): Promise<void> {
+  async function proceed(
+    method: PaymentMethod,
+    provider: CheckoutProviderOption,
+    buyer?: { phone: string; attempt: number },
+  ): Promise<void> {
     if (picking) return;
     picking = true;
     const token = ++pickToken;
@@ -386,7 +398,11 @@
 
     try {
       if (!initialPaymentIntent) {
-        const intent = await store.initialize(method, { allowedProviders: [provider.provider] });
+        const intent = await store.initialize(method, {
+          allowedProviders: [provider.provider],
+          phone: buyer?.phone,
+          attempt: buyer?.attempt,
+        });
         if (token !== pickToken) return;
         if (!intent) {
           stage = 'list';
@@ -430,8 +446,18 @@
   function handleMomoSubmit(data: MobileMoneyFormData): void {
     const provider = providerFor('mobile_money');
     if (!provider) return;
+    const attempt = promptsSent;
+    if (attempt > MAX_PROMPT_ATTEMPT) {
+      dispatch('error', {
+        code: 'TOO_MANY_ATTEMPTS',
+        message: 'Too many attempts. Please close this window and start again.',
+        recoverable: false,
+      } as { code: string; message: string });
+      return;
+    }
+    promptsSent += 1;
     momoData = data;
-    void proceed('mobile_money', provider);
+    void proceed('mobile_money', provider, { phone: data.phone, attempt });
   }
 
   function handlePSPSuccess(pspResult: Record<string, unknown>): void {
@@ -651,6 +677,7 @@
   });
 
   onDestroy(() => {
+    store.dispose();
     leaveBridge();
     if (typeof document !== 'undefined') {
       document.body.style.overflow = '';
@@ -726,18 +753,21 @@
             <!-- M-Pesa's own waiting/failed panels carry the heading and the way back. -->
             {#if pspLower !== 'mpesa'}<PanelHead title={methodLabel} onBack={handlePSPClose} />{/if}
             {#if pspLower === 'mpesa'}
-              <MPesaPanel
-                apiEndpoint={`${apiBaseUrl ?? 'https://api.reevit.io'}/v1/payments/${state.paymentIntent?.id}/mpesa`}
-                phoneNumber={momoData?.phone || phone || ''}
-                amount={displayAmount}
-                currency={displayCurrency}
-                headers={{ 'x-reevit-public-key': publicKey || '' }}
-                reference={state.paymentIntent?.reference ?? state.paymentIntent?.id ?? ''}
-                description={`Payment ${state.paymentIntent?.reference ?? ''}`}
-                onSuccess={(res) => handlePSPSuccess(res)}
-                onError={(err) => dispatch('error', err)}
-                onChangeNumber={() => (stage = 'phone')}
-              />
+              <!-- A new payment is a new prompt: start its poll from scratch. -->
+              {#key state.paymentIntent?.id}
+                <MPesaPanel
+                  paymentId={state.paymentIntent?.id ?? ''}
+                  clientSecret={state.paymentIntent?.clientSecret}
+                  {publicKey}
+                  {apiBaseUrl}
+                  phoneNumber={momoData?.phone || phone || ''}
+                  reference={state.paymentIntent?.reference ?? state.paymentIntent?.id}
+                  onSuccess={(res) => handlePSPSuccess(res)}
+                  onError={(err) => dispatch('error', err)}
+                  onRetry={momoData ? () => handleMomoSubmit(momoData!) : undefined}
+                  onChangeNumber={() => (stage = 'phone')}
+                />
+              {/key}
             {:else if pspLower === 'stripe'}
               <StripePanel
                 publishableKey={state.paymentIntent?.pspPublicKey ?? publicKey ?? ''}
