@@ -150,7 +150,7 @@ describe('ReevitCheckout server-created sessions', () => {
     const headers = selectCalls[0][1]?.headers as Record<string, string>;
     expect(headers['Idempotency-Key']).toMatch(/^reevit_checkout_selection_[0-9a-f]{32}$/);
     expect(headers['X-Reevit-Client']).toBe('@reevit/svelte');
-    expect(headers['X-Reevit-Client-Version']).toBe('0.12.1');
+    expect(headers['X-Reevit-Client-Version']).toBe('0.13.0');
     expect(resumeTransaction).not.toHaveBeenCalledWith('card-only-access-code', expect.anything());
     expect(newTransaction).not.toHaveBeenCalled();
   });

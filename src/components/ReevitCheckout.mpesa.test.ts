@@ -324,7 +324,7 @@ describe('ReevitCheckout never treats a pending payment as paid', () => {
   it('shows a calm Confirming state with no Try again, keeps polling, and succeeds once it says succeeded', async () => {
     const { onSuccess, onError, states, fetchMock } = await providerSaysPaid((poll) => ({ id: 'pay_mock_1', status: poll >= 4 ? 'succeeded' : 'pending' }));
 
-    expect(screen.getByText('Confirming your payment')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Confirming your payment' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(q('failure')).toBeNull();
     expect(states()).toContain('confirming');
@@ -352,7 +352,7 @@ describe('ReevitCheckout never treats a pending payment as paid', () => {
   it.each(NON_DEFINITIVE)('keeps confirming, with no Try again, when the first check is %s', async (_name, respond) => {
     const { onSuccess, onError } = await providerSaysPaid(respond);
 
-    expect(screen.getByText('Confirming your payment')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Confirming your payment' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(q('failure')).toBeNull();
     expect(onError).not.toHaveBeenCalled();
@@ -388,7 +388,7 @@ describe('ReevitCheckout never treats a pending payment as paid', () => {
     const { onSuccess, onError, onClose, states } = await providerSaysPaid(() => ({ id: 'pay_mock_1', status: 'pending' }));
 
     await advance(119_000);
-    expect(screen.getByText('Confirming your payment')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Confirming your payment' })).toBeTruthy();
     await advance(6_000);
 
     expect(screen.getByText('We’re still confirming this payment')).toBeTruthy();

@@ -3,7 +3,7 @@
   import { ReevitCheckout } from '../src';
   import logoBlack from './img/logo-short-black.png';
   import logoWhite from './img/logo-short-white.png';
-  import { amount, currency, intent, params, provider, state as shot, theme } from './stubs';
+  import { amount, currency, direct, intent, params, provider, state as shot, theme } from './stubs';
 
   const needsClick = params.get('pointer') === '1';
   let open = $state(!needsClick);
@@ -34,6 +34,22 @@
       if (shot === 'mpesa-waiting' || shot === 'mpesa-failed') {
         await wait(60);
         click('[data-reevit="momo-form"] [data-reevit="cta"]');
+      }
+      if (direct) {
+        // M-Pesa is the only method, so there is no list to pick from.
+        if (shot !== 'momo-mpesa-wait') click('[data-reevit="row"][data-method="mobile_money"]');
+        await wait(120);
+        if (shot === 'momo-voucher') {
+          const input = qs<HTMLInputElement>('[data-reevit="momo-form"] input');
+          if (input) {
+            const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+            set.call(input, '0201234567');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          await wait(60);
+        }
+        if (shot !== 'momo-form') click('[data-reevit="momo-form"] [data-reevit="cta"]');
+        await wait(shot === 'momo-timeout' ? 2200 : 500);
       }
       document.documentElement.dataset.ready = shot;
     })();
@@ -67,7 +83,8 @@
       email="ama.owusu@example.com"
       phone={provider === 'mpesa' ? '0712345678' : '0244128890'}
       paymentMethods={['card', 'mobile_money', 'bank_transfer']}
-      initialPaymentIntent={shot === 'loading' ? undefined : intent}
+      sessionSecret={direct ? 'cs_preview' : undefined}
+      initialPaymentIntent={shot === 'loading' || direct ? undefined : intent}
       successDelayMs={600000}
       theme={theming}
     />

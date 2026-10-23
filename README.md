@@ -253,6 +253,10 @@ await openMonnifyModal({
 });
 ```
 
+### Mobile money in Reevit's own screens
+
+When the checkout session says a provider takes mobile money directly, `ReevitCheckout` collects the number, sends the prompt through Reevit and shows the wait, code and result screens itself (no provider window). It needs a server-created `sessionSecret`; hosted providers, public-key mode and `initialPaymentIntent` keep the provider's own window. Only a payment the server reports as `succeeded` fires `success`. Cards are never direct.
+
 ### M-Pesa (Kenya/Tanzania)
 
 M-Pesa uses STK Push: the customer approves a prompt on their phone. `ReevitCheckout` asks for the number, creates the payment with it (that is what sends the prompt), then waits. It checks the payment every 4 seconds and finishes only when the payment has `succeeded` or has failed, or after 2 minutes with no approval.
