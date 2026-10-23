@@ -255,21 +255,11 @@ await openMonnifyModal({
 
 ### M-Pesa (Kenya/Tanzania)
 
-```ts
-import { initiateMPesaSTKPush } from '@reevit/svelte';
+M-Pesa uses STK Push: the customer approves a prompt on their phone. `ReevitCheckout` asks for the number, creates the payment with it (that is what sends the prompt), then waits. It checks the payment every 4 seconds and finishes only when the payment has `succeeded` or has failed, or after 2 minutes with no approval.
 
-const result = await initiateMPesaSTKPush(
-  {
-    phoneNumber: '254712345678',
-    amount: 500,
-    reference: 'TXN_12345',
-    onInitiated: () => console.log('STK Push sent'),
-    onSuccess: (result) => console.log('Paid:', result.transactionId),
-    onError: (err) => console.error(err.message),
-  },
-  '/api/mpesa/stk-push'
-);
-```
+### Provider says paid, backend still pending
+
+Popup providers can report success before Reevit's own confirmation lands. The checkout then shows "Confirming your payment" (no Try again, closing is allowed and does not cancel the payment) and keeps checking for up to 2 minutes. `success` fires only on `succeeded`. If it is still pending after 2 minutes the checkout shows "We're still confirming this payment" with Done, fires neither `success` nor `error`, and `stateChange` reports `confirming` then `pending`.
 
 ## Supported PSPs
 

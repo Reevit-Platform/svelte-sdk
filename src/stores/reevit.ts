@@ -26,7 +26,23 @@ import {
   type ReevitTheme,
 } from '@reevit/core';
 
+import { isDefinitiveFailure, isPaymentFailure, pollPaymentStatus } from '../utils/pollPaymentStatus';
+
 const DEFAULT_PUBLIC_API_BASE_URL = 'https://api.reevit.io';
+
+/**
+ * After the provider reports success the backend can still say `pending` for a while
+ * (webhooks and verification are slow). Keep asking, calmly, for up to two minutes.
+ */
+const CONFIRM_TIMEOUT_MS = 120_000;
+const CONFIRM_INTERVAL_MS = 4_000;
+
+/** `confirming`: the provider said paid, the backend has not agreed yet. `unconfirmed`: it still had not at the deadline. */
+export type Confirmation = 'idle' | 'confirming' | 'unconfirmed';
+/** The core states, plus the two the checkout reports while a paid provider payment is unconfirmed. */
+export type ReevitStateChange = CheckoutState | 'confirming' | 'pending';
+/** What the store publishes: the core state plus the confirmation phase. */
+export type ReevitStoreState = ReevitState & { confirmation: Confirmation };
 
 function buildPaymentLinkError(response: Response, data: any): PaymentError {
   return {
@@ -45,7 +61,7 @@ interface CreateReevitStoreOptions {
   onSuccess?: (result: PaymentResult) => void;
   onError?: (error: PaymentError) => void;
   onClose?: () => void;
-  onStateChange?: (state: CheckoutState) => void;
+  onStateChange?: (state: ReevitStateChange) => void;
   apiBaseUrl?: string;
 }
 
@@ -59,6 +75,10 @@ async function selectCheckoutSession(
   provider: string,
   idempotencyKey: string,
   apiBaseUrl?: string,
+  /** The payer's mobile money number, so the provider can push its prompt to it. */
+  phone?: string,
+  /** 0 for the first try, then 1, 2, 3 for retries (a fresh prompt each). */
+  attempt?: number,
 ): Promise<{ data?: CheckoutSessionSelectionResponse; error?: PaymentError }> {
   const response = await fetch(
     `${apiBaseUrl || DEFAULT_PUBLIC_API_BASE_URL}/v1/checkout/sessions/${encodeURIComponent(sessionSecret)}/select`,
@@ -68,9 +88,14 @@ async function selectCheckoutSession(
         'Content-Type': 'application/json',
         'Idempotency-Key': idempotencyKey,
         'X-Reevit-Client': '@reevit/svelte',
-        'X-Reevit-Client-Version': '0.12.0',
+        'X-Reevit-Client-Version': '0.12.1',
       },
-      body: JSON.stringify({ method, provider }),
+      body: JSON.stringify({
+        method,
+        provider,
+        ...(phone ? { phone } : {}),
+        ...(attempt ? { attempt } : {}),
+      }),
     },
   );
   const responseData = await response.json().catch(() => ({}));
@@ -130,8 +155,19 @@ function digest128Hex(value: string): string {
  * must replay the first selection rather than create a second one — so this must
  * never become a random UUID.
  */
-export function checkoutSelectionIdentity(sessionSecret: string, method: PaymentMethod, provider: string): string {
-  return `reevit_checkout_selection_${digest128Hex(`${sessionSecret}:${method}:${provider}`)}`;
+export function checkoutSelectionIdentity(
+  sessionSecret: string,
+  method: PaymentMethod,
+  provider: string,
+  /** What else makes this selection distinct, such as the number and retry. Omit for the plain triple. */
+  extra?: string,
+): string {
+  return `reevit_checkout_selection_${digest128Hex(`${sessionSecret}:${method}:${provider}${extra ? `:${extra}` : ''}`)}`;
+}
+
+/** Folds the payer's number and the retry into the idempotency scope without writing the number into a header. */
+function selectionVariant(phone: string | undefined, attempt: number | undefined): string {
+  return [phone ? `p${digest128Hex(phone)}` : '', attempt ? `a${attempt}` : ''].filter(Boolean).join(':');
 }
 
 // Subscriber type for writable store compatibility
@@ -281,7 +317,8 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
     currentIntentKey = `initial:${config.initialPaymentIntent.id}`;
   }
 
-  const subscribers = new Set<Subscriber<ReevitState>>();
+  let confirmation: Confirmation = 'idle';
+  const subscribers = new Set<Subscriber<ReevitStoreState>>();
 
   // API client
   const apiClient = new ReevitAPIClient({
@@ -291,7 +328,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
 
   // Notify subscribers
   const notify = () => {
-    subscribers.forEach((subscriber) => subscriber(state));
+    subscribers.forEach((subscriber) => subscriber({ ...state, confirmation }));
   };
 
   // Dispatch action
@@ -306,9 +343,9 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
   };
 
   // Subscribe function for Svelte store contract
-  const subscribe = (subscriber: Subscriber<ReevitState>): Unsubscriber => {
+  const subscribe = (subscriber: Subscriber<ReevitStoreState>): Unsubscriber => {
     subscribers.add(subscriber);
-    subscriber(state); // Immediately call with current value
+    subscriber({ ...state, confirmation }); // Immediately call with current value
     return () => subscribers.delete(subscriber);
   };
 
@@ -316,7 +353,14 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
   // not be created (the error is in the store state) or the request was superseded.
   const initialize = async (
     method?: PaymentMethod,
-    options?: { preferredProvider?: string; allowedProviders?: string[] }
+    options?: {
+      preferredProvider?: string;
+      allowedProviders?: string[];
+      /** The payer's mobile money number. The provider pushes its prompt to it. */
+      phone?: string;
+      /** 0 for the first try; a retry after a failed prompt passes 1, 2, 3 to get a fresh intent. */
+      attempt?: number;
+    }
   ): Promise<PaymentIntent | undefined> => {
     if (config.initialPaymentIntent) {
       return state.paymentIntent ?? undefined;
@@ -334,21 +378,29 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
       const paymentMethod = method ?? defaultMethod;
 
       // A session selection gets its own identity so re-selecting the same method replays the first selection.
+      const buyerPhone = options?.phone || undefined;
+      const attempt = options?.attempt || 0;
+      const variant = selectionVariant(buyerPhone, attempt);
       const selectionScope = [
         paymentMethod,
         options?.preferredProvider,
         ...(options?.allowedProviders ? [...options.allowedProviders].sort() : []),
+        variant,
       ].filter(Boolean).join(':');
       const selectionProvider = options?.preferredProvider || options?.allowedProviders?.[0];
       const selectionIdempotencyKey = config.sessionSecret && paymentMethod && selectionProvider
-        ? checkoutSelectionIdentity(config.sessionSecret, paymentMethod, selectionProvider)
+        ? checkoutSelectionIdentity(config.sessionSecret, paymentMethod, selectionProvider, variant)
         : undefined;
       const identityConfig = selectionScope
         ? {
             ...config,
+            phone: buyerPhone ?? config.phone,
             idempotencyKey: config.idempotencyKey
               ? `${config.idempotencyKey}:${selectionScope}`
               : selectionIdempotencyKey,
+            // Only the intent cache key reads this (a retry must not reuse the failed intent);
+            // createPaymentIntent never sends customFields.
+            ...(attempt ? { customFields: { ...config.customFields, reevit_attempt: attempt } } : {}),
           }
         : config;
 
@@ -383,6 +435,8 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
                 selectionProvider,
                 idempotencyKey,
                 apiBaseUrl,
+                buyerPhone,
+                attempt,
               )
             : await apiClient.getCheckoutSession(config.sessionSecret);
 
@@ -414,7 +468,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
                 amount: config.amount,
                 email: config.email || '',
                 name: config.customerName || '',
-                phone: config.phone || '',
+                phone: buyerPhone ?? config.phone ?? '',
                 method: paymentMethod,
                 country,
                 provider: options?.preferredProvider || options?.allowedProviders?.[0],
@@ -502,65 +556,111 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
     dispatch({ type: 'SELECT_METHOD', payload: method });
   };
 
-  // Process payment after PSP success
+  // Settling a provider's "success" can outlive the checkout; stop on reset or close.
+  let settleController: AbortController | null = null;
+
+  // Process payment after a PSP reports success.
+  // The backend decides: only `succeeded` is a paid payment. A provider can say
+  // "done" before its webhook lands. While the backend says pending the buyer sees
+  // a calm "Confirming" state with no retry (they may already have been debited),
+  // and the payment is never reported as success until it has succeeded.
   const processPayment = async (paymentData: Record<string, unknown>) => {
-    if (!state.paymentIntent || !state.selectedMethod) {
+    const intent = state.paymentIntent;
+    const method = state.selectedMethod;
+    if (!intent || !method) {
       return;
     }
 
     dispatch({ type: 'PROCESS_START' });
+    settleController?.abort();
+    const controller = new AbortController();
+    settleController = controller;
+
+    const fail = (error: PaymentError) => {
+      confirmation = 'idle';
+      dispatch({ type: 'PROCESS_ERROR', payload: error });
+      onError?.(error);
+    };
 
     try {
-      let resultData;
+      // Use the public confirm endpoint if a client secret is available
+      const confirm = async () => {
+        try {
+          return await (intent.clientSecret
+            ? apiClient.confirmPaymentIntent(intent.id, intent.clientSecret)
+            : apiClient.confirmPayment(intent.id));
+        } catch {
+          return { error: { code: 'network_error', message: 'Could not reach Reevit.', recoverable: true } as PaymentError };
+        }
+      };
 
-      // Use public confirm endpoint if client secret is available
-      if (state.paymentIntent.clientSecret) {
-        const { data, error } = await apiClient.confirmPaymentIntent(
-          state.paymentIntent.id,
-          state.paymentIntent.clientSecret
-        );
-        if (error) {
-          dispatch({ type: 'PROCESS_ERROR', payload: error });
-          onError?.(error);
+      const first = await confirm();
+      if (controller.signal.aborted) return;
+
+      // The backend saying outright that the payment failed is a failure. Anything
+      // else (network, timeout, 5xx, 429, junk) says nothing: the buyer may already
+      // be debited, so keep confirming instead of offering a retry.
+      if (first.error && isDefinitiveFailure(first.error)) {
+        fail(first.error);
+        return;
+      }
+
+      let confirmed = first.data;
+      if (first.error || (confirmed?.status !== 'succeeded' && !isPaymentFailure(confirmed?.status))) {
+        confirmation = 'confirming';
+        notify();
+        onStateChange?.('confirming');
+        const settled = await pollPaymentStatus({
+          check: confirm,
+          signal: controller.signal,
+          intervalMs: CONFIRM_INTERVAL_MS,
+          timeoutMs: CONFIRM_TIMEOUT_MS,
+        });
+        if (settled.kind === 'aborted') return;
+        if (settled.kind === 'timeout') {
+          // Not failed, not paid: leave it to the webhook. No retry, no onError, no onSuccess.
+          confirmation = 'unconfirmed';
+          notify();
+          onStateChange?.('pending');
           return;
         }
-        resultData = data;
-      } else {
-        const { data, error } = await apiClient.confirmPayment(state.paymentIntent.id);
-        if (error) {
-          dispatch({ type: 'PROCESS_ERROR', payload: error });
-          onError?.(error);
-          return;
-        }
-        resultData = data;
+        confirmation = 'idle';
+        confirmed = settled.data;
+      }
+
+      if (confirmed?.status !== 'succeeded') {
+        fail({
+          code: 'PAYMENT_FAILED',
+          message: 'The payment was not completed. Please try again.',
+          recoverable: true,
+        });
+        return;
       }
 
       const result: PaymentResult = {
-        paymentId: state.paymentIntent.id,
+        paymentId: intent.id,
         reference: (paymentData.reference as string) ||
-          (state.paymentIntent as PaymentIntent).reference ||
-          (state.paymentIntent.metadata?.reference as string) || '',
-        amount: state.paymentIntent.amount,
-        currency: state.paymentIntent.currency,
-        paymentMethod: state.selectedMethod,
-        psp: state.paymentIntent.recommendedPsp,
+          (intent as PaymentIntent).reference ||
+          (intent.metadata?.reference as string) || '',
+        amount: intent.amount,
+        currency: intent.currency,
+        paymentMethod: method,
+        psp: intent.recommendedPsp,
         pspReference: (paymentData.pspReference as string) ||
-          (resultData?.provider_ref_id as string) || '',
+          (confirmed?.provider_ref_id as string) || '',
         status: 'success',
-        metadata: paymentData,
+        metadata: { ...paymentData, backend_status: confirmed?.status },
       };
 
       dispatch({ type: 'PROCESS_SUCCESS', payload: result });
       onSuccess?.(result);
     } catch (err) {
-      const error: PaymentError = {
+      fail({
         code: 'PAYMENT_FAILED',
         message: err instanceof Error ? err.message : 'Payment failed',
         recoverable: true,
         originalError: err,
-      };
-      dispatch({ type: 'PROCESS_ERROR', payload: error });
-      onError?.(error);
+      });
     }
   };
 
@@ -577,8 +677,10 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
 
   // Reset checkout
   const reset = async () => {
-    // Cancel the existing payment intent if it exists and is still pending
-    if (state.paymentIntent && state.status !== 'success') {
+    settleController?.abort();
+    // Cancel the existing payment intent if it exists and is still pending, unless
+    // the provider already said it was paid: that payment must be left to settle.
+    if (state.paymentIntent && state.status !== 'success' && confirmation === 'idle') {
       try {
         await apiClient.cancelPaymentIntent(state.paymentIntent.id);
       } catch {
@@ -586,6 +688,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
       }
     }
 
+    confirmation = 'idle';
     initializing = false;
     currentIntentKey = null;
     initRequestId += 1;
@@ -594,7 +697,9 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
 
   // Close checkout
   const close = async () => {
-    if (state.paymentIntent && state.status !== 'success') {
+    settleController?.abort();
+    // Leave a payment the provider already called paid to settle.
+    if (state.paymentIntent && state.status !== 'success' && confirmation === 'idle') {
       try {
         await apiClient.cancelPaymentIntent(state.paymentIntent.id);
       } catch {
@@ -602,6 +707,7 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
       }
     }
 
+    confirmation = 'idle';
     dispatch({ type: 'CLOSE' });
     onClose?.();
   };
@@ -629,6 +735,8 @@ export function createReevitStore(options: CreateReevitStoreOptions) {
     handlePspError,
     reset,
     close,
+    /** Stop any in-flight confirmation. Call when the component using the store is destroyed. */
+    dispose: () => settleController?.abort(),
 
     // Getters
     getStatus,

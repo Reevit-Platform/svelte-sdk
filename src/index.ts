@@ -61,7 +61,6 @@ export {
   createStripeInstance,
   confirmStripePayment,
   openMonnifyModal,
-  initiateMPesaSTKPush,
 
   // Types
   type PaystackConfig,
@@ -69,6 +68,4 @@ export {
   type FlutterwaveConfig,
   type StripeConfig,
   type MonnifyConfig,
-  type MPesaConfig,
-  type MPesaSTKPushResult,
 } from './bridges';

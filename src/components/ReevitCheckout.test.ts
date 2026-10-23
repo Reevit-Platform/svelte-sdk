@@ -150,7 +150,7 @@ describe('ReevitCheckout server-created sessions', () => {
     const headers = selectCalls[0][1]?.headers as Record<string, string>;
     expect(headers['Idempotency-Key']).toMatch(/^reevit_checkout_selection_[0-9a-f]{32}$/);
     expect(headers['X-Reevit-Client']).toBe('@reevit/svelte');
-    expect(headers['X-Reevit-Client-Version']).toBe('0.12.0');
+    expect(headers['X-Reevit-Client-Version']).toBe('0.12.1');
     expect(resumeTransaction).not.toHaveBeenCalledWith('card-only-access-code', expect.anything());
     expect(newTransaction).not.toHaveBeenCalled();
   });
@@ -736,11 +736,8 @@ describe('ReevitCheckout M-Pesa', () => {
     },
   });
 
-  it('asks for the number when M-Pesa is the only method and sends the STK push after Pay', async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = init?.body ? JSON.parse(String(init.body)) : {};
-      return new Response(JSON.stringify(body.phone_number ? { checkout_request_id: 'ws_CO_1' } : {}), { status: 200 });
-    });
+  it('asks for the number when M-Pesa is the only method, then waits for the approval (the push is sent server-side)', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify({ status: 'pending' }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
     render(ReevitCheckout, { props: kenyaProps() });
@@ -755,8 +752,7 @@ describe('ReevitCheckout M-Pesa', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Pay KES 755.00' }));
 
     await screen.findByText('Approve on your phone');
-    const stk = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/mpesa'));
-    expect(JSON.parse(String(stk?.[1]?.body))).toMatchObject({ phone_number: '254712345678', currency: 'KES', amount: 75500 });
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/mpesa'))).toBe(false);
   });
 
   it('rejects a number that is not a Kenyan mobile', async () => {
@@ -765,18 +761,6 @@ describe('ReevitCheckout M-Pesa', () => {
     await fireEvent.input(screen.getByLabelText('M-Pesa number'), { target: { value: '512345678' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Pay KES 755.00' }));
     expect(screen.getByRole('alert').textContent).toBe('Enter a valid M-Pesa number');
-  });
-
-  it('shows the failure panel with a retry when the push cannot be sent', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ message: 'Safaricom is unavailable' }), { status: 500 })));
-    const onError = vi.fn();
-    render(ReevitCheckout, { props: { ...kenyaProps(), phone: '0712345678' }, events: { error: onError } });
-
-    await fireEvent.click(screen.getByRole('button', { name: 'Pay KES 755.00' }));
-    await waitFor(() => expect(query('[data-reevit="failure"]')).not.toBeNull());
-    expect(query('[data-reevit="failure"]')?.textContent).toContain('Safaricom is unavailable');
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 });
 
