@@ -27,6 +27,7 @@ All notable changes to `@reevit/svelte` will be documented in this file.
 
 ### Fixed
 
+- Server-created checkout sessions now select the shopper's method server-side: tapping a method POSTs `{ method, provider }` to `/v1/checkout/sessions/:secret/select` with a deterministic `Idempotency-Key`, so Paystack opens a method-specific intent and a repeated tap replays the first selection. Previously the initial intent was opened whatever method was tapped.
 - `MobileMoneyForm` validates the number against the selected network. It passed the network where `validatePhone` expects a country, so a mismatch was never reported.
 - The header formats amounts with the currency's real exponent.
 - Flutterwave checkout converts Reevit minor units using the currency exponent. A 5,012 GHS intent requests 50.12 GHS; a 5,000 XOF intent requests 5,000 XOF.

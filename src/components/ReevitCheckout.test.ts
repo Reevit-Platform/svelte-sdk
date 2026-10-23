@@ -103,9 +103,117 @@ describe('ReevitCheckout server-created sessions', () => {
     }
   });
 
-  it.todo('opens Paystack with the shopper-selected Mobile Money intent and deduplicates repeated taps (needs the /checkout/sessions/:secret/select call, which this store does not make yet)');
 
-  it.todo('requests and opens a card-specific intent (needs the /checkout/sessions/:secret/select call, which this store does not make yet)');
+
+  it('opens Paystack with the shopper-selected Mobile Money intent and deduplicates repeated taps', async () => {
+    const { newTransaction, resumeTransaction } = installPaystackBridge();
+
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method || init.method === 'GET') {
+        return new Response(JSON.stringify(sessionResponse('card-only-access-code')), { status: 200 });
+      }
+
+      return new Response(JSON.stringify({
+        payment_intent: sessionResponse('mobile-money-access-code', 'mobile_money').payment_intent,
+      }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(ReevitCheckout, {
+      props: {
+        isOpen: true,
+        sessionSecret: SESSION_SECRET + '_momo',
+        paymentMethods: ['card', 'mobile_money'],
+        email: 'shopper@example.com',
+        phone: '0241234567',
+      },
+    });
+
+    const row = await screen.findByRole('button', { name: 'Mobile money' });
+    row.click();
+    row.click();
+
+    await waitFor(() => expect(resumeTransaction).toHaveBeenCalledWith(
+      'mobile-money-access-code',
+      expect.any(Object),
+    ));
+
+    const selectCalls = fetchMock.mock.calls.filter(([input, init]) =>
+      String(input).endsWith(`/v1/checkout/sessions/${encodeURIComponent(SESSION_SECRET + '_momo')}/select`) &&
+      init?.method === 'POST',
+    );
+    expect(selectCalls).toHaveLength(1);
+    expect(JSON.parse(String(selectCalls[0][1]?.body))).toEqual({
+      method: 'mobile_money',
+      provider: 'paystack',
+    });
+    const headers = selectCalls[0][1]?.headers as Record<string, string>;
+    expect(headers['Idempotency-Key']).toMatch(/^reevit_checkout_selection_[0-9a-f]{32}$/);
+    expect(headers['X-Reevit-Client']).toBe('@reevit/svelte');
+    expect(headers['X-Reevit-Client-Version']).toBe('0.12.0');
+    expect(resumeTransaction).not.toHaveBeenCalledWith('card-only-access-code', expect.anything());
+    expect(newTransaction).not.toHaveBeenCalled();
+  });
+
+  it('requests and opens a card-specific intent', async () => {
+    const { resumeTransaction } = installPaystackBridge();
+
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method || init.method === 'GET') {
+        return new Response(JSON.stringify(sessionResponse('initial-access-code')), { status: 200 });
+      }
+
+      return new Response(JSON.stringify({
+        payment_intent: sessionResponse('card-specific-access-code').payment_intent,
+      }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(ReevitCheckout, {
+      props: {
+        isOpen: true,
+        sessionSecret: SESSION_SECRET + '_card',
+        paymentMethods: ['card', 'mobile_money'],
+        email: 'shopper@example.com',
+      },
+    });
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Card' }));
+
+    await waitFor(() => expect(resumeTransaction).toHaveBeenCalledWith(
+      'card-specific-access-code',
+      expect.any(Object),
+    ));
+    const selectCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST');
+    expect(JSON.parse(String(selectCall?.[1]?.body))).toEqual({
+      method: 'card',
+      provider: 'paystack',
+    });
+  });
+
+  it('replays the same selection identity when the same method is tapped again after backing out', async () => {
+    const { resumeTransaction } = installPaystackBridge();
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method || init.method === 'GET') {
+        return new Response(JSON.stringify(sessionResponse('initial-access-code')), { status: 200 });
+      }
+      return new Response(JSON.stringify({ payment_intent: sessionResponse('replay-card-code').payment_intent }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(ReevitCheckout, {
+      props: { isOpen: true, sessionSecret: SESSION_SECRET + '_replay', paymentMethods: ['card'], email: 'shopper@example.com' },
+    });
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Card' }));
+    await waitFor(() => expect(resumeTransaction).toHaveBeenCalledTimes(1));
+    resumeTransaction.mock.calls[0][1].onCancel();
+    await fireEvent.click(await screen.findByRole('button', { name: 'Card' }));
+    await waitFor(() => expect(resumeTransaction).toHaveBeenCalledTimes(2));
+
+    // The second tap reuses the first selection instead of sending another.
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
 
   it('routes to the recommended provider when several support the method, with no processor picker', async () => {
     const { resumeTransaction } = installPaystackBridge();
@@ -115,7 +223,16 @@ describe('ReevitCheckout server-created sessions', () => {
       { provider: 'flutterwave', name: 'Flutterwave', methods: ['card', 'mobile_money'] },
       { provider: 'paystack', name: 'Paystack', methods: ['card', 'mobile_money'] },
     ];
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(initial), { status: 200 })));
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method || init.method === 'GET') {
+        return new Response(JSON.stringify(initial), { status: 200 });
+      }
+
+      return new Response(JSON.stringify({
+        payment_intent: sessionResponse('paystack-mobile-money-code', 'mobile_money').payment_intent,
+      }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
     render(ReevitCheckout, {
       props: {
@@ -130,18 +247,34 @@ describe('ReevitCheckout server-created sessions', () => {
     await screen.findByRole('button', { name: 'Mobile money' });
     expect(screen.queryByRole('button', { name: 'Paystack' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Flutterwave' })).toBeNull();
-    expect(query('[data-reevit="footer-logo"]')?.getAttribute('data-provider')).toBe('paystack');
 
     await fireEvent.click(rowButton('Mobile money'));
 
-    await waitFor(() => expect(resumeTransaction).toHaveBeenCalledWith('initial-access-code', expect.any(Object)));
-    expect(query('[data-reevit="footer-logo"]')?.getAttribute('data-provider')).toBe('paystack');
+    await waitFor(() => expect(resumeTransaction).toHaveBeenCalledWith(
+      'paystack-mobile-money-code',
+      expect.any(Object),
+    ));
+    const selectCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST');
+    expect(JSON.parse(String(selectCall?.[1]?.body))).toEqual({
+      method: 'mobile_money',
+      provider: 'paystack',
+    });
   });
 
   it('never logs the shopper to the console while starting a payment', async () => {
     const { resumeTransaction } = installPaystackBridge();
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(sessionResponse('pii-card-access-code')), { status: 200 })));
+
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method || init.method === 'GET') {
+        return new Response(JSON.stringify(sessionResponse('initial-access-code')), { status: 200 });
+      }
+
+      return new Response(JSON.stringify({
+        payment_intent: sessionResponse('pii-card-access-code').payment_intent,
+      }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
     render(ReevitCheckout, {
       props: {
