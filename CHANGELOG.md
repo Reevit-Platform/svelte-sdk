@@ -2,10 +2,33 @@
 
 All notable changes to `@reevit/svelte` will be documented in this file.
 
-## [0.11.1] - Unreleased
+## [0.12.0] - Unreleased
+
+### Added
+
+- **New Ledger checkout.** `ReevitCheckout` has a new interface: a calm, monochrome dialog with a single list of payment methods, the merchant name and logo, the amount and order reference up top, and a "Secured by Reevit" footer showing the provider that will take the payment. On screens 480px and narrower it is a bottom sheet. The markup and stylesheet are identical to `@reevit/react` 0.12.0.
+- **Reevit picks the processor.** The processor picker is gone. The method list is the union of the methods across your connected providers (Card, Mobile money, Bank transfer, Apple Pay, Google Pay, in that order). Tapping a method routes to the recommended provider if it supports it, otherwise to the first connected provider that does. Hubtel is still limited to card and mobile money, and `paymentMethods` still filters the list. `ProviderSelector` is still exported but the checkout no longer renders it.
+- **Card, bank and wallet details stay in the provider's own window.** After the tap the dialog shows the method title with a back chevron and an "Opening Paystack…" line while the provider window is open. Closing that window returns to the list.
+- **Stripe** renders its Payment Element inside the dialog, styled to match (it previously reported "not implemented").
+- **M-Pesa** asks for the number on its own screen (+254, no network choice), sends the STK push when the shopper taps Pay, then shows "Approve on your phone" or a failure panel with **Try again** and **Use another number**. The push request now also carries the currency and the `x-reevit-public-key` header, as the React SDK does.
+- **Receipt** shows reference, method, provider and date, with **Done** and **Download receipt**. Done (or closing the receipt) delivers `success` once and closes; the `successDelayMs` auto-close still works and never delivers it twice. Closing the receipt before the delay used to drop `success`; it now delivers it.
+- **Failures** show a plain panel with the message and **Try again**, including provider-window errors that used to return silently to the list.
+- **Leaving mid-payment** (close, scrim or Esc while a provider window is open or a payment is being confirmed) asks "Leave checkout?" first.
+- **Accessibility.** `role="dialog"` with `aria-modal` and a labelled title, focus moves into the dialog and returns to the opener, Tab is trapped, Esc closes, a polite live region announces each step, and reduced motion is respected.
+- **Bundled fonts.** Inter, Geist Mono and Bricolage Grotesque (latin subsets, about 115 KB) are inlined into `@reevit/svelte/styles.css` under the family names `Reevit Inter`, `Reevit Mono` and `Reevit Display`, so there are no third-party font requests (the old stylesheet imported Geist Mono from Google Fonts) and no clash with the merchant's fonts.
+- **Theming.** Light by default; `theme.darkMode` or an `html.dark` class switches to dark. `buttonBackgroundColor` and `buttonTextColor` still drive the primary button. Every custom property is prefixed `--rv-` and every rule is scoped under `.reevit-root`.
+- `MobileMoneyForm` accepts `mode` (`'network'` or `'mpesa'`) and `submitLabel`. `store.initialize()` now resolves with the payment intent.
+
+### Changed (visual, breaking for CSS overrides)
+
+- All `reevit-brut__*` and `reevit-brut-overlay` class names are replaced by the new `reevit-*` Ledger names (`reevit-dialog`, `reevit-header`, `reevit-row`, `reevit-cta`, and so on). The `--rb-accent` and `--rb-accent-text` variables are gone. If you override the checkout's CSS, review those overrides. The props, events, slots, exports and the `@reevit/svelte/styles.css` path are unchanged.
+- The processor picker and the "Make payment" step, with their copy, no longer exist.
+- `LoadingState` takes `title`, `message` and `variant` (`'block'` or `'line'`); the `marker` prop is removed. It is not exported from the package entry.
 
 ### Fixed
 
+- `MobileMoneyForm` validates the number against the selected network. It passed the network where `validatePhone` expects a country, so a mismatch was never reported.
+- The header formats amounts with the currency's real exponent.
 - Flutterwave checkout converts Reevit minor units using the currency exponent. A 5,012 GHS intent requests 50.12 GHS; a 5,000 XOF intent requests 5,000 XOF.
 - The exported `openFlutterwaveModal` helper retains Flutterwave's major-unit config contract; the widget performs conversion before calling it.
 - Keep `svelte/internal/*` external in the package build so checkout components mount on the consumer's Svelte runtime.
