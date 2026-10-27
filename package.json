@@ -1,7 +1,7 @@
 {
   "name": "@reevit/svelte",
   "version": "0.14.0",
-  "description": "Unified Payment Widget for Svelte Applications",
+  "description": "Reevit Svelte Payment Checkout SDK — Unified payment orchestration for Africa (Paystack, Hubtel, Flutterwave, M-Pesa, Moolre, Monnify, PawaPay, Stripe)",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -30,15 +30,27 @@
   },
   "keywords": [
     "reevit",
+    "payment-orchestration",
     "payments",
     "africa",
+    "ghana",
+    "nigeria",
+    "kenya",
+    "mobile-money",
     "svelte",
     "sveltekit",
-    "sdk"
+    "paystack",
+    "hubtel",
+    "flutterwave",
+    "mpesa",
+    "moolre",
+    "monnify",
+    "pawapay",
+    "stripe"
   ],
-  "author": "Reevit",
+  "author": "Reevit <support@reevit.io> (https://reevit.io)",
   "license": "MIT",
-  "homepage": "https://github.com/Reevit-Platform/svelte-sdk#readme",
+  "homepage": "https://reevit.io",
   "repository": {
     "type": "git",
     "url": "https://github.com/Reevit-Platform/svelte-sdk.git"
