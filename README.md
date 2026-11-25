@@ -183,6 +183,7 @@ For full control over the payment flow, use the `createReevitStore` factory.
 | `theme` | `ReevitTheme` | Customization options for the widget |
 | `apiBaseUrl` | `string` | Override API base URL (self-hosted/testing) |
 | `successDelayMs` | `number` | Delay before calling `on:success` and closing (default `5000`) |
+| `returnUrl` | `string` | Flutterwave only. Where Flutterwave sends the payer when its window is done. When set, Flutterwave navigates there instead of calling `on:success`; confirm the payment on that page |
 
 ## Theme Reference
 
