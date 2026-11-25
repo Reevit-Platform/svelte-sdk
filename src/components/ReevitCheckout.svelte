@@ -49,6 +49,7 @@
     openPaystackPopup,
     openHubtelPopup,
     openFlutterwaveModal,
+  flutterwaveTxRef,
     openMonnifyModal,
   } from '../bridges';
   import {
@@ -803,7 +804,7 @@
         case 'flutterwave': {
           await openFlutterwaveModal({
             public_key: intent.pspPublicKey ?? publicKey ?? '',
-            tx_ref: intent.id,
+            tx_ref: flutterwaveTxRef(intent),
             amount: toFlutterwaveAmount(displayAmount, displayCurrency),
             currency: displayCurrency,
             customer: {
