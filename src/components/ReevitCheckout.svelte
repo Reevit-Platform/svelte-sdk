@@ -112,6 +112,14 @@
   export let apiBaseUrl: string | undefined = undefined;
   export let initialPaymentIntent: PaymentIntent | undefined = undefined;
   export let successDelayMs: number = 5000;
+  /**
+   * Where Flutterwave sends the payer when its payment window is done. Set it
+   * when a method needs an off-page approval step (Ghana mobile money).
+   * Flutterwave then navigates here instead of calling `onSuccess`: confirm the
+   * payment on that page from the `status`, `tx_ref` and `transaction_id` it
+   * adds to the URL. Leave it unset to keep the callback flow.
+   */
+  export let returnUrl: string | undefined = undefined;
 
   let resolvedTheme: ReevitTheme = {};
   let successTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -803,6 +811,7 @@
               phone_number: phoneNumber ?? '',
             },
             meta: bridgeMetadata,
+            redirect_url: returnUrl,
             callback: (res) => handlePSPSuccess(res),
             onclose: () => live() && handlePSPClose(),
           });
