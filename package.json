@@ -1,6 +1,6 @@
 {
   "name": "@reevit/svelte",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "description": "Reevit Svelte Payment Checkout SDK — Unified payment orchestration for Africa (Paystack, Hubtel, Flutterwave, M-Pesa, Moolre, Monnify, PawaPay, Stripe)",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
